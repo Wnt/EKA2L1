@@ -30,6 +30,19 @@ namespace eka2l1::common {
     void set_thread_name(const char *thread_name);
 
     /**
+     * \brief Name the calling thread for the log only, leaving its OS name alone.
+     *
+     * Linux hands a newly created thread the name of the thread that created it, so
+     * naming one that goes on to spawn many others -- the UI thread creates Qt's
+     * worker pools, the Wayland and D-Bus threads and more -- would label all of them
+     * with it in ps, top and a debugger. Use this where that matters and the name is
+     * only wanted in the log.
+     *
+     * \param thread_name       Name of the thread.
+     */
+    void set_thread_log_name(const char *thread_name);
+
+    /**
      * \brief Get the name set on the calling thread by set_thread_name.
      *
      * \returns The name, or nullptr if the thread was never named.

@@ -20,6 +20,10 @@
 
 #pragma once
 
+#include <common/log.h>
+#include <common/stall.h>
+
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <condition_variable>
@@ -123,6 +127,12 @@ namespace eka2l1::drivers {
             return false;
         }
 
+        // Log class a stalled wait on this driver is reported under. The base has no
+        // way to know which driver it is; those that care say so.
+        virtual log_class wait_report_class() const {
+            return COMMON;
+        }
+
         virtual void wait_for(int *status) {
             std::unique_lock<std::mutex> ulock(mut_);
 
@@ -130,7 +140,15 @@ namespace eka2l1::drivers {
                 return;
             }
 
-            cond_.wait(ulock, [&]() { return (*status != -100) || aborted(); });
+            // This is where the emulator waits for the driver thread, and where it
+            // stops for good if that thread has died, aborted without notifying, or is
+            // itself blocked. Untimed, that is a freeze with nothing in the log; the
+            // wait below is identical except that it says so and then carries on.
+            common::wait_reporting_stall(wait_report_class(), "the driver to finish a command list",
+                [&](const std::uint64_t timeout_us) {
+                    return cond_.wait_for(ulock, std::chrono::microseconds(timeout_us),
+                        [&]() { return (*status != -100) || aborted(); });
+                });
         }
 
         void finish(int *status, const int code) {

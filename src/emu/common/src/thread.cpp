@@ -179,8 +179,12 @@ namespace eka2l1::common {
     // that stops can be attributed to the thread that stopped writing it.
     static thread_local std::string thread_name_local;
 
-    void set_thread_name(const char *thread_name) {
+    void set_thread_log_name(const char *thread_name) {
         thread_name_local = thread_name ? thread_name : "";
+    }
+
+    void set_thread_name(const char *thread_name) {
+        set_thread_log_name(thread_name);
         set_thread_name_native(thread_name);
     }
 

@@ -53,6 +53,7 @@ add_library(common
         include/common/resource.h
         include/common/runlen.h
         include/common/svg.h
+        include/common/stall.h
         include/common/sync.h
         include/common/thread.h
         include/common/time.h
@@ -91,6 +92,7 @@ add_library(common
         src/random.cpp
         src/runlen.cpp
         src/svg.cpp
+        src/stall.cpp
         src/sync.cpp
         src/thread.cpp
         src/time.cpp
