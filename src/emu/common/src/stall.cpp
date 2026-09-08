@@ -18,6 +18,7 @@
  */
 
 #include <common/stall.h>
+#include <common/watchdog.h>
 
 namespace eka2l1::common {
     static thread_local const char *blocked_on = nullptr;
@@ -29,9 +30,11 @@ namespace eka2l1::common {
     wait_scope::wait_scope(const char *what)
         : previous_(blocked_on) {
         blocked_on = what;
+        publish_wait(what);
     }
 
     wait_scope::~wait_scope() {
         blocked_on = previous_;
+        publish_wait(previous_);
     }
 }

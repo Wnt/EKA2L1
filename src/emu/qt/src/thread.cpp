@@ -28,6 +28,7 @@
 #include <common/random.h>
 #include <common/stall.h>
 #include <common/thread.h>
+#include <common/watchdog.h>
 #include <common/time.h>
 #include <common/vecx.h>
 #include <qt/cmdhandler.h>
@@ -54,6 +55,7 @@
 #endif
 
 #include <QApplication>
+#include <QTimer>
 #include <QWindow>
 
 #include <qt/mainwindow.h>
@@ -337,6 +339,8 @@ namespace eka2l1::desktop {
         _set_se_translator(seh_handler_translator_func);
 #endif
 
+        common::watched_thread os_watch(os_thread_name);
+
         while (!state.should_emu_quit) {
 #if ENABLE_SEH_HANDLER
             try {
@@ -352,7 +356,10 @@ namespace eka2l1::desktop {
             }
 #endif
 
+            os_watch.beat();
+
             if (state.should_emu_pause && !state.should_emu_quit) {
+                const common::parked_scope parked("the emulator being paused");
                 state.pause_event.wait();
             }
         }
@@ -449,6 +456,18 @@ namespace eka2l1::desktop {
             }
         }
 
+        // A timer keeps firing for as long as the event loop turns, so the beats
+        // stopping means the UI thread itself is stuck.
+        common::watched_thread ui_watch(ui_thread_name);
+        QTimer ui_heartbeat;
+
+        QObject::connect(&ui_heartbeat, &QTimer::timeout, &application, [&ui_watch]() {
+            ui_watch.beat();
+        });
+
+        ui_heartbeat.start(250);
+        common::start_watchdog();
+
         state.ui_main = new main_window(application, nullptr, state);
         state.ui_main->setWindowTitle(get_emulator_window_title());
         state.ui_main->load_and_show();
@@ -466,6 +485,8 @@ namespace eka2l1::desktop {
         }
 
         const int exec_code = application.exec();
+
+        common::stop_watchdog();
         kill_emulator(state);
 
         // Wait for OS thread to die

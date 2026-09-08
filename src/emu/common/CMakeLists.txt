@@ -56,6 +56,7 @@ add_library(common
         include/common/stall.h
         include/common/sync.h
         include/common/thread.h
+        include/common/watchdog.h
         include/common/time.h
         include/common/types.h
         include/common/unicode.h
@@ -95,6 +96,7 @@ add_library(common
         src/stall.cpp
         src/sync.cpp
         src/thread.cpp
+        src/watchdog.cpp
         src/time.cpp
         src/types.cpp
         src/unicode.cpp
