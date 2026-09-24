@@ -140,6 +140,20 @@ namespace eka2l1 {
             break;
         }
 
+        case fbs_font_height_in_twips:
+        case fbs_font_height_in_pixels: {
+            // EKA1 CFbsTypefaceStore::FontHeightIn{Twips,Pixels}(aTypefaceIndex, aHeightIndex): the classic
+            // point-size ladder of the Symbian font store. Never completing it parks the caller forever.
+            static constexpr std::int32_t POINT_LADDER[] = { 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36 };
+            static constexpr std::int32_t LADDER_LAST = static_cast<std::int32_t>(sizeof(POINT_LADDER) / sizeof(POINT_LADDER[0])) - 1;
+            std::int32_t height_idx = ctx->get_argument_value<std::int32_t>(1).value_or(0);
+            height_idx = (height_idx < 0) ? 0 : ((height_idx > LADDER_LAST) ? LADDER_LAST : height_idx);
+            const std::int32_t twips = POINT_LADDER[height_idx] * 20;
+            // 96 dpi: 1440 twips per inch
+            ctx->complete((ctx->msg->function == fbs_font_height_in_twips) ? twips : (twips * 96 / 1440));
+            break;
+        }
+
         case fbs_num_typefaces: {
             num_typefaces(ctx);
             break;
