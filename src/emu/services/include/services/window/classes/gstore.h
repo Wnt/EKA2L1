@@ -106,7 +106,8 @@ namespace eka2l1::epoc {
         GDI_STORE_COMMAND_INVERT_MASK = 1 << 0,
         GDI_STORE_COMMAND_MAIN_RAW = 1 << 1,
         GDI_STORE_COMMAND_MASK_RAW = 1 << 2,
-        GDI_STORE_COMMAND_BLIT = 1 << 3
+        GDI_STORE_COMMAND_BLIT = 1 << 3,
+        GDI_STORE_COMMAND_TILE = 1 << 4 ///< Source rect may run past the bitmap: repeat it (patterned brush).
     };
 
     struct gdi_store_command_draw_bitmap_data {
