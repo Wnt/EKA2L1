@@ -66,6 +66,7 @@ namespace eka2l1 {
     namespace {
         constexpr std::size_t POSIX_MAX_PATH = 256;
         constexpr std::int32_t POSIX_S_IFREG = 0100000;
+        constexpr std::int32_t POSIX_S_IFDIR = 0040000;
         constexpr std::int32_t POSIX_BLOCK_SIZE = 1024;
 
         // S60 2nd Edition's libc/sys/fcntl.h values. Host O_* constants are an
@@ -534,6 +535,50 @@ namespace eka2l1 {
         POSIX_REQUEST_FINISH(ctx);
     }
 
+    // PMstat: stat() by path. Same parameter slots as open (cwptr[0] = path) and fstat (ptr[0] = struct stat).
+    // Series 80 Opera stats its configuration files at start-up and panics POSIXIF when this is unanswered.
+    void posix_server::stat_path(service::ipc_context &ctx) {
+        POSIX_REQUEST_INIT(ctx);
+
+        const std::optional<std::u16string> rel_path = read_guest_path(own_process, params->cwptr[0]);
+
+        if (!rel_path || !valid_guest_range(own_process, params->ptr[0].ptr_address(), sizeof(posix_stat))) {
+            params->ret = -1;
+            POSIX_REQUEST_FINISH_WITH_ERR(ctx, EFAULT);
+        }
+
+        const std::u16string path_u16 = eka2l1::absolute_path(*rel_path, working_dir, true);
+        const std::optional<entry_info> info = ctx.sys->get_io_system()->get_entry_info(path_u16);
+
+        if (!info) {
+            params->ret = -1;
+            POSIX_REQUEST_FINISH_WITH_ERR(ctx, ENOENT);
+        }
+
+        auto *file_stat = params->ptr[0].cast<posix_stat>().get(own_process);
+        *file_stat = {};
+
+        file_stat->mode = ((info->type == io_component_type::dir) ? POSIX_S_IFDIR : POSIX_S_IFREG) | 0777;
+        file_stat->link_count = 1;
+        file_stat->size = static_cast<std::int32_t>(std::min<std::size_t>(
+            info->size, static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())));
+
+        if (info->last_write >= common::ad_epoc_dist_microsecs) {
+            const std::uint64_t unix_time = (info->last_write - common::ad_epoc_dist_microsecs) / common::microsecs_per_sec;
+            file_stat->modification_time = static_cast<std::int32_t>(std::min<std::uint64_t>(
+                unix_time, static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max())));
+            file_stat->access_time = file_stat->modification_time;
+            file_stat->change_time = file_stat->modification_time;
+        }
+
+        file_stat->block_size = POSIX_BLOCK_SIZE;
+        file_stat->blocks = static_cast<std::int32_t>((info->size + POSIX_BLOCK_SIZE - 1) / POSIX_BLOCK_SIZE);
+
+        params->ret = 0;
+        *errnoptr = 0;
+        POSIX_REQUEST_FINISH(ctx);
+    }
+
     void posix_server::read(service::ipc_context &ctx) {
         POSIX_REQUEST_INIT(ctx);
 
@@ -616,6 +661,7 @@ namespace eka2l1 {
         REGISTER_IPC(posix_server, write, PMwrite, "Posix::Write");
         REGISTER_IPC(posix_server, lseek, PMlseek, "Posix::LSeek");
         REGISTER_IPC(posix_server, fstat, PMfstat, "Posix::Fstat");
+        REGISTER_IPC(posix_server, stat_path, PMstat, "Posix::Stat");
         REGISTER_IPC(posix_server, dup, PMdup, "Posix::Dup");
         REGISTER_IPC(posix_server, dup2, PMdup2, "Posix::Dup2");
     }

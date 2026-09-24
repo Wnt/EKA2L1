@@ -119,6 +119,7 @@ namespace eka2l1 {
         void close(service::ipc_context &ctx);
         void lseek(service::ipc_context &ctx);
         void fstat(service::ipc_context &ctx);
+        void stat_path(service::ipc_context &ctx);
 
         void read(service::ipc_context &ctx);
         void write(service::ipc_context &ctx);
