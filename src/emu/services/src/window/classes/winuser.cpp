@@ -765,22 +765,33 @@ namespace eka2l1::epoc {
         // The data given is a 32 bit handle.
         // We are suppose to write back the offset distance between the given window and this.
         const std::uint32_t handle = *reinterpret_cast<std::uint32_t *>(cmd.data_ptr);
-        canvas_base *win = reinterpret_cast<canvas_base *>(client->get_object(handle));
+        epoc::window *target = dynamic_cast<epoc::window *>(client->get_object(handle));
 
-        if (!win) {
-            ctx.complete(epoc::error_not_found);
+        if (!target) {
+            // A non-window object (a DSA, a GC...) through a mis-decoded opcode must not be cast blindly:
+            // a virtual call through the wrong vtable used to end in dsa::~dsa and a host segfault.
+            LOG_ERROR(SERVICE_WINDOW, "Inquire offset with a handle 0x{:X} that is not a window!", handle);
+            ctx.complete(epoc::error_argument);
             return;
         }
 
-        if (win->type == epoc::window_kind::group) {
-            win = reinterpret_cast<canvas_base*>(win->child);
-            
-            if (win->type != epoc::window_kind::top_client) {
+        if (target->type == epoc::window_kind::group) {
+            target = target->child;
+
+            if (!target || (target->type != epoc::window_kind::top_client)) {
                 LOG_ERROR(SERVICE_WINDOW, "Inquire offset with a corrupted window group!");
                 ctx.complete(epoc::error_general);
 
                 return;
             }
+        }
+
+        canvas_interface *win = dynamic_cast<canvas_interface *>(target);
+
+        if (!win) {
+            LOG_ERROR(SERVICE_WINDOW, "Inquire offset with a window 0x{:X} that has no position!", handle);
+            ctx.complete(epoc::error_argument);
+            return;
         }
 
         eka2l1::vec2 offset_dist = absolute_position() - win->absolute_position();

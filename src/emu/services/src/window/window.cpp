@@ -318,7 +318,7 @@ namespace eka2l1::epoc {
             if (device_handle <= 0) {
                 device_ptr = primary_device;
             } else {
-                device_ptr = reinterpret_cast<epoc::screen_device *>(get_object(device_handle));
+                device_ptr = dynamic_cast<epoc::screen_device *>(get_object(device_handle));
             }
 
             if (!device_ptr) {
@@ -329,7 +329,7 @@ namespace eka2l1::epoc {
                 target_screen = device_ptr->scr;
             }
 
-            parent_group = reinterpret_cast<epoc::window *>(get_object(header->parent_id));
+            parent_group = dynamic_cast<epoc::window *>(get_object(header->parent_id));
 
             if (!parent_group) {
                 LOG_WARN(SERVICE_WINDOW, "Unable to find parent for new group with ID = 0x{:x}. Use root", header->parent_id);
@@ -357,7 +357,7 @@ namespace eka2l1::epoc {
 
     void window_server_client::create_window_base(service::ipc_context &ctx, ws_cmd &cmd) {
         ws_cmd_window_header *header = reinterpret_cast<decltype(header)>(cmd.data_ptr);
-        epoc::window *parent = reinterpret_cast<epoc::window *>(get_object(header->parent));
+        epoc::window *parent = dynamic_cast<epoc::window *>(get_object(header->parent));
 
         if (!parent) {
             LOG_WARN(SERVICE_WINDOW, "Unable to find parent for new window with ID = 0x{:x}. Use root", header->parent);
@@ -416,7 +416,7 @@ namespace eka2l1::epoc {
 
     void window_server_client::create_sprite(service::ipc_context &ctx, ws_cmd &cmd) {
         ws_cmd_create_sprite_header *sprite_header = reinterpret_cast<decltype(sprite_header)>(cmd.data_ptr);
-        epoc::window *win = reinterpret_cast<epoc::window *>(get_object(sprite_header->window_handle));
+        epoc::window *win = dynamic_cast<epoc::window *>(get_object(sprite_header->window_handle));
 
         if (!win) {
             LOG_WARN(SERVICE_WINDOW, "Window handle is invalid! Abort");
