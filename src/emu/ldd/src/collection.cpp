@@ -23,6 +23,7 @@
 #include <ldd/hal/hal.h>
 #include <ldd/mmcif/mmcif.h>
 #include <ldd/oldcamera/oldcamera.h>
+#include <ldd/nulldevice/nulldevice.h>
 #include <ldd/videodriver/videodriver.h>
 
 #include <system/epoc.h>
@@ -44,6 +45,7 @@ namespace eka2l1::ldd {
     FACTORY_DECLARE(ecomm_factory)
     FACTORY_DECLARE(hal_factory)
     FACTORY_DECLARE(video_driver_factory)
+    FACTORY_DECLARE(null_device_factory)
     FACTORY_DECLARE(ekeyb_factory)
     FACTORY_DECLARE(old_camera_factory)
 
@@ -52,6 +54,12 @@ namespace eka2l1::ldd {
         FACTORY_REGISTER("ecomm", ecomm_factory),
         FACTORY_REGISTER("dhal", hal_factory),
         FACTORY_REGISTER("videodriver", video_driver_factory),
+        // The sound hardware is driven by the audio driver, not by the
+        // guest's device: what the guest asks it changes nothing. Opening it
+        // does matter, though - see nulldevice.h.
+        FACTORY_REGISTER("audio", null_device_factory),
+        FACTORY_REGISTER("audioldd", null_device_factory),
+        FACTORY_REGISTER("nosdriver", null_device_factory),
         FACTORY_REGISTER("ekeyb", ekeyb_factory),
         FACTORY_REGISTER("cameraldd", old_camera_factory),
     };
