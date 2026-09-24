@@ -2479,7 +2479,8 @@ namespace eka2l1 {
 
             if ((kb.source.type == config::KEYBIND_TYPE_KEY) || is_mouse) {
                 const std::uint32_t bind_keycode = (is_mouse ? epoc::KEYBIND_TYPE_MOUSE_CODE_BASE : 0) + kb.source.data.keycode;
-                input_mapping.key_input_map[bind_keycode] = static_cast<epoc::std_scan_code>(kb.target);
+                // Kept as a plain number: a Series 80 character binding packs a key code above the scan code.
+                input_mapping.key_input_map[bind_keycode] = kb.target;
             } else if (kb.source.type == config::KEYBIND_TYPE_CONTROLLER) {
                 input_mapping.button_input_map[std::make_pair(kb.source.data.button.controller_id, kb.source.data.button.button_id)] = static_cast<epoc::std_scan_code>(kb.target);
             }

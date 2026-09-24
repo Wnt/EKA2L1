@@ -184,6 +184,11 @@ void display_widget::keyPressEvent(QKeyEvent *event) {
     }
 }
 
+bool display_widget::focusNextPrevChild(bool next) {
+    // Tab and Shift+Tab belong to the emulated device, not to Qt's focus chain.
+    return false;
+}
+
 void display_widget::keyReleaseEvent(QKeyEvent *event) {
     if (event->isAutoRepeat()) {
         return;

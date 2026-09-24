@@ -1570,7 +1570,7 @@ void main_window::make_default_binding_profile() {
 
     if (!entry_count) {
         emulator_state_.conf.current_keybind_profile = "default";
-        make_default_keybind_profile(emulator_state_.conf.keybinds);
+        make_default_keybind_profile(emulator_state_.conf.keybinds, emulator_state_.symsys && emulator_state_.symsys->is_s80_device_active());
 
         emulator_state_.conf.serialize();
     }
