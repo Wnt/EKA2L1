@@ -79,6 +79,15 @@ namespace eka2l1::epoc {
         eka2l1::rect clipping_rect;
         common::region clipping_region;
 
+        // CFbsBitGc state the build-139 (EKA1) opcode table drives directly.
+        // The brush pattern is kept as the client's FBS handle and resolved at draw time,
+        // so a bitmap the client frees in between can never be dereferenced.
+        eka2l1::vec2 brush_origin{ 0, 0 };
+        std::uint32_t brush_pattern_handle{ 0 };
+
+        // The pen's current position: MoveTo/MoveBy set it, DrawLine/DrawLineTo/DrawLineBy end on it.
+        eka2l1::vec2 line_position{ 0, 0 };
+
         void submit_queue_commands(kernel::thread *rq);
         void on_command_batch_done(service::ipc_context &ctx) override;
 
@@ -96,6 +105,11 @@ namespace eka2l1::epoc {
 
         void do_command_draw_bitmap(service::ipc_context &ctx, void *bitmap, eka2l1::rect source_rect, eka2l1::rect dest_rect, const std::uint8_t flags);
         bool get_brush_color(eka2l1::vec4 &color_brush);
+
+        // Fill an area with the current brush: solid colour, or the brush pattern bitmap tiled from
+        // the brush origin. Returns false when the brush paints nothing (null brush, no pattern).
+        bool fill_with_brush(const eka2l1::rect &area);
+        void do_draw_line(const eka2l1::vec2 &start, const eka2l1::vec2 &end);
         bool get_pen_color_and_style(eka2l1::vec4 &pen_color, drivers::pen_style &style);
 
         void do_submit_clipping();
@@ -124,6 +138,14 @@ namespace eka2l1::epoc {
         void set_underline_style(service::ipc_context &context, ws_cmd &cmd);
         void set_strikethrough_style(service::ipc_context &context, ws_cmd &cmd);
         void set_draw_mode(service::ipc_context &context, ws_cmd &cmd);
+        void set_brush_origin(service::ipc_context &context, ws_cmd &cmd);
+        void use_brush_pattern(service::ipc_context &context, ws_cmd &cmd);
+        void discard_brush_pattern(service::ipc_context &context, ws_cmd &cmd);
+        void move_to(service::ipc_context &context, ws_cmd &cmd);
+        void move_by(service::ipc_context &context, ws_cmd &cmd);
+        void draw_line_to(service::ipc_context &context, ws_cmd &cmd);
+        void draw_line_by(service::ipc_context &context, ws_cmd &cmd);
+        void ignore_state(service::ipc_context &context, ws_cmd &cmd);
 
         void gdi_blt_impl(service::ipc_context &context, ws_cmd &cmd, const int ver, const bool ws);
         void gdi_blt_masked(service::ipc_context &context, ws_cmd &cmd);

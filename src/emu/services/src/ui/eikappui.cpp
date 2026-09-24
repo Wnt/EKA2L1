@@ -100,7 +100,65 @@ namespace eka2l1 {
         serv->cap_server_->remove_session(client_ss_uid_);
     }
 
+    // Series 80 v2 EikSrv (CKON eiksrvs.h, TEikUiOpCode). Only 9/10 happen to line up with the
+    // S60 table after the EKA1 remap below; 5, 6 and 13 would land on blank, unblank and the Avkon
+    // SGC range. The task list, the back-stepping application stack and the status pane live in the
+    // ROM's EikSrv, which this HLE server stands in for: they are accepted and have no effect here.
+    enum eik_app_ui_s80_opcode {
+        eik_s80_notify_alarm_server_of_task_change = 0,
+        eik_s80_launch_task_list = 1,
+        eik_s80_cycle_tasks = 2,
+        eik_s80_add_to_stack = 3,
+        eik_s80_remove_from_stack = 4,
+        eik_s80_execute_d = 5,
+        eik_s80_set_status_pane_flags = 6,
+        eik_s80_set_status_pane_layout = 7,
+        eik_s80_notifier = 8,
+        eik_s80_blank_screen = 9,
+        eik_s80_unblank_screen = 10,
+        eik_s80_resolve_error = 11,
+        eik_s80_extension = 12,
+        eik_s80_update_status_pane_layout = 13
+    };
+
+    void eikappui_session::fetch_s80(service::ipc_context *ctx) {
+        switch (ctx->msg->function) {
+        case eik_s80_blank_screen:
+            cap_session_->blank_screen(ctx);
+            break;
+
+        case eik_s80_unblank_screen:
+            cap_session_->unblank_screen(ctx);
+            break;
+
+        case eik_s80_notify_alarm_server_of_task_change:
+        case eik_s80_launch_task_list:
+        case eik_s80_cycle_tasks:
+        case eik_s80_add_to_stack:
+        case eik_s80_remove_from_stack:
+        case eik_s80_set_status_pane_flags:
+        case eik_s80_set_status_pane_layout:
+        case eik_s80_notifier:
+        case eik_s80_extension:
+        case eik_s80_update_status_pane_layout:
+            LOG_TRACE(SERVICE_UI, "Series 80 EikSrv op {} accepted without effect", ctx->msg->function);
+            ctx->complete(epoc::error_none);
+            break;
+
+        default:
+            // ExecuteD (a dialog run by the server) and ResolveError need the ROM's EikSrv.
+            LOG_WARN(SERVICE_UI, "Unimplemented Series 80 EikSrv opcode {}", ctx->msg->function);
+            ctx->complete(epoc::error_none);
+            break;
+        }
+    }
+
     void eikappui_session::fetch(service::ipc_context *ctx) {
+        if (ctx->sys->get_symbian_version_use() == epocver::epoc7) {
+            fetch_s80(ctx);
+            return;
+        }
+
         if (ctx->msg->function >= eik_app_ui_range_sgc) {
             // Redirect to cap session
             ctx->msg->function = ctx->msg->function - eik_app_ui_range_sgc + akn_eik_app_ui_set_sgc_params;
