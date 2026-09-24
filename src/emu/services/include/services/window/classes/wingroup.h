@@ -33,12 +33,44 @@ namespace eka2l1::kernel {
 
 namespace eka2l1::epoc {
     struct top_canvas;
+    struct canvas_base;
     using message_data = std::vector<std::uint8_t>;
+
+    // The group's text cursor (RWsTextCursor). Position and size are the drawn rectangle,
+    // relative to the cursor window's origin: pos.y already has the ascent taken off.
+    struct text_cursor {
+        enum {
+            type_none = 0,
+            type_rectangle = 1,
+            type_hollow_rectangle = 2
+        };
+
+        enum {
+            flag_no_flash = 1 << 0
+        };
+
+        std::int32_t type = type_none;
+        std::uint32_t window_handle = 0;
+        std::uint32_t window_id = 0;
+        eka2l1::vec2 pos{ 0, 0 };
+        eka2l1::vec2 size{ 0, 0 };
+        std::uint32_t flags = 0;
+        std::uint32_t color = 0;
+        bool clipped = false;
+        eka2l1::rect clip_rect;
+
+        bool operator==(const text_cursor &rhs) const {
+            return (type == rhs.type) && (window_handle == rhs.window_handle) && (window_id == rhs.window_id)
+                && (pos == rhs.pos) && (size == rhs.size) && (flags == rhs.flags) && (color == rhs.color)
+                && (clipped == rhs.clipped) && (!clipped || ((clip_rect.top == rhs.clip_rect.top) && (clip_rect.size == rhs.clip_rect.size)));
+        }
+    };
 
     struct window_group : public epoc::window {
         std::u16string name;
         std::unique_ptr<top_canvas> top;
         std::queue<message_data> msg_datas;
+        text_cursor cursor;
 
         eka2l1::config::app_setting saved_setting;
         std::size_t uid_owner_change_callback_handle;
@@ -65,8 +97,14 @@ namespace eka2l1::epoc {
         void on_owner_process_uid_type_change(const std::uint32_t new_uid);
         void set_name(const std::u16string &new_name);
 
+        // The client window carrying the cursor, or null (and the cursor dropped) when it is gone.
+        canvas_base *text_cursor_window();
+        bool text_cursor_flashing() const;
+        void text_cursor_changed();
+
         // ===================== COMMAND OPCODES =======================
-        void set_text_cursor(service::ipc_context &context, ws_cmd &cmd);
+        void set_text_cursor(service::ipc_context &context, ws_cmd &cmd, const bool clipped);
+        void cancel_text_cursor(service::ipc_context &context, ws_cmd &cmd);
         void receive_focus(service::ipc_context &context, ws_cmd &cmd);
         void add_priority_key(service::ipc_context &context, ws_cmd &cmd);
         void set_name(service::ipc_context &context, ws_cmd &cmd);

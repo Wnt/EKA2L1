@@ -39,6 +39,22 @@ TEST_CASE("Window protocol extensions do not shift other platform tables", "[win
     REQUIRE_FALSE(belle.legacy_dsa());
 }
 
+TEST_CASE("Series 80 v2 window opcodes decode to the WS32.DLL exports", "[window]") {
+    // S80 DP2.0 WS32.DLL reports 1.0.151 on 7.0s but has neither AbsPosition nor SendAdvancedPointerEvent.
+    epoc::window_server_protocol s80(epocver::epoc7, {1, 0, 151});
+    REQUIRE(s80.window_opcode(0x0b) == EWsWinOpPosition);
+    REQUIRE(s80.window_opcode(0x0c) == EWsWinOpSize);
+    REQUIRE(s80.window_opcode(0x10) == EWsWinOpBeginRedraw);
+    REQUIRE(s80.window_opcode(0x12) == EWsWinOpEndRedraw);
+    REQUIRE(s80.window_opcode(0x1c) == EWsWinOpClaimPointerGrab);
+    REQUIRE(s80.window_opcode(0x2d) == EWsWinOpSetTextCursor);
+    REQUIRE(s80.window_opcode(0x2e) == EWsWinOpSetTextCursorClipped);
+    REQUIRE(s80.window_opcode(0x2f) == EWsWinOpCancelTextCursor);
+    REQUIRE(s80.window_opcode(0x60) == EWsWinOpSendPointerEvent);
+    REQUIRE(s80.window_opcode(0x61) == EWsWinOpGetDisplayMode);
+    REQUIRE(s80.session_opcode(ws_cl_op_start_custom_text_cursor) == ws_cl_op_start_custom_text_cursor);
+}
+
 TEST_CASE("Mapped framebuffer tracks writes without a sentinel pixel value", "[window]") {
     epoc::framebuffer_observer observer;
     std::vector<std::uint8_t> pixels(16, 255);
