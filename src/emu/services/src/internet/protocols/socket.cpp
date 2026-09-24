@@ -1366,6 +1366,48 @@ namespace eka2l1::epoc::internet {
                 return true;
             }
 
+            // KSoTcpKeepAlive (in_sock.h 0x305).
+            case INET_TCP_KEEP_ALIVE_OPT: {
+                if (!buffer || (avail_size < sizeof(int))) {
+                    return false;
+                }
+
+                const int value = *reinterpret_cast<int *>(buffer);
+                void *opaque_handle_copy = opaque_handle_;
+
+                looper_->one_shot([opaque_handle_copy, value]() {
+                    uv_tcp_keepalive(reinterpret_cast<uv_tcp_t*>(opaque_handle_copy), value, 60);
+                });
+
+                return true;
+            }
+
+            // KSoTcpOobInline (in_sock.h 0x315): keep urgent data in the normal stream. Symbian OS 7.0s
+            // clients may treat a failure as fatal -- PuTTY for Series 80 v2 sets it before every
+            // Connect and gives up on EKA1 when it fails.
+            case INET_TCP_OOB_INLINE_OPT: {
+                if (!buffer || (avail_size < sizeof(int))) {
+                    return false;
+                }
+
+                const int value = (*reinterpret_cast<int *>(buffer) != 0) ? 1 : 0;
+                void *opaque_handle_copy = opaque_handle_;
+
+                looper_->one_shot([opaque_handle_copy, value]() {
+                    uv_os_fd_t fd{};
+                    if (uv_fileno(reinterpret_cast<uv_handle_t *>(opaque_handle_copy), &fd) != 0) {
+                        return;
+                    }
+#if EKA2L1_PLATFORM(WIN32)
+                    setsockopt(reinterpret_cast<SOCKET>(fd), SOL_SOCKET, SO_OOBINLINE, reinterpret_cast<const char *>(&value), sizeof(value));
+#else
+                    setsockopt(static_cast<int>(fd), SOL_SOCKET, SO_OOBINLINE, reinterpret_cast<const char *>(&value), sizeof(value));
+#endif
+                });
+
+                return true;
+            }
+
             default:
                 break;
             }
