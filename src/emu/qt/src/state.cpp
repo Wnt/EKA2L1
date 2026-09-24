@@ -41,6 +41,9 @@
 
 #include <QSettings>
 
+#include <spdlog/sinks/dist_sink.h>
+#include <spdlog/spdlog.h>
+
 namespace eka2l1::desktop {
     emulator::emulator()
         : symsys(nullptr)
@@ -60,14 +63,39 @@ namespace eka2l1::desktop {
         , present_status(0) {
     }
 
+    // --log-file: swap the data directory's EKA2L1.log sink for one at the given path, with
+    // the same line budget. setup_log() has opened (and emptied) EKA2L1.log by now; it is
+    // left behind empty, which is harmless, rather than changing a header the whole tree
+    // includes.
+    static void redirect_log_file(const std::string &path) {
+        if (!log::spd_logger) {
+            return;
+        }
+
+        std::vector<spdlog::sink_ptr> &sinks = log::spd_logger->sinks();
+        for (spdlog::sink_ptr &sink : sinks) {
+            if (std::dynamic_pointer_cast<spdlog::sinks::dist_sink_mt>(sink)) {
+                continue;
+            }
+
+            sink = log::make_capped_file_sink(path, log::LOG_FILE_MAX_LINES);
+            sink->set_pattern("%L %^%v%$");
+            sink->set_level(spdlog::level::trace);
+        }
+    }
+
     void emulator::stage_one() {
         // Initialize the logger
         log::setup_log(nullptr);
 
+        if (!log_file_path.empty()) {
+            redirect_log_file(log_file_path);
+        }
+
         QSettings settings;
         QVariant cmd_log_enabled_variant = settings.value(SHOW_LOG_CONSOLE_SETTING_NAME, true);
 
-        if (cmd_log_enabled_variant.toBool()) {
+        if (console_log && cmd_log_enabled_variant.toBool()) {
             // Initially false. Toggle to set to true!
             log::toggle_console();
         }
@@ -75,7 +103,7 @@ namespace eka2l1::desktop {
         // Start to read the configs
         conf.deserialize();
         if (log::filterings) {
-            log::filterings->parse_filter_string(conf.log_filter);
+            log::filterings->parse_filter_string(log_filter_override.empty() ? conf.log_filter : log_filter_override);
         }
 
         LOG_INFO(FRONTEND_CMDLINE, "EKA2L1 v0.0.1 ({}-{})", GIT_BRANCH, GIT_COMMIT_HASH);

@@ -38,6 +38,7 @@
 #include <qt/btnmap/editor_widget.h>
 #include <qt/btnmap/executor.h>
 #include <qt/custom_question_dialog.h>
+#include <qt/kiosk.h>
 
 #include <kernel/kernel.h>
 #include <system/devices.h>
@@ -78,10 +79,16 @@
 #include <QProgressDialog>
 #include <QSettings>
 #include <QLineEdit>
+#include <QPixmap>
+#include <QScreen>
 #include <QThreadPool>
+#include <QTimer>
 #include <QtConcurrent/QtConcurrent>
 
 #include <stb_image.h>
+
+#include <chrono>
+#include <memory>
 
 static constexpr const char *LAST_UI_WINDOW_GEOMETRY_SETTING = "lastWindowGeometry";
 static constexpr const char *LAST_UI_WINDOW_STATE = "lastWindowState";
@@ -138,6 +145,11 @@ static void mode_change_screen(void *userdata, eka2l1::epoc::screen *scr, const 
         return;
     }
 
+    // The kiosk window has one fixed size for the whole run.
+    if (state_ptr->kiosk.enabled) {
+        return;
+    }
+
     QSize new_minsize(scr->current_mode().size.x, scr->current_mode().size.y);
     if ((scr->ui_rotation % 180) != 0) {
         new_minsize = QSize(scr->current_mode().size.y, scr->current_mode().size.x);
@@ -170,7 +182,8 @@ static void draw_emulator_screen(void *userdata, eka2l1::epoc::screen *scr, cons
     eka2l1::rect src;
     eka2l1::rect dest;
 
-    eka2l1::drivers::filter_option filter = state.conf.nearest_neighbor_filtering ? eka2l1::drivers::filter_option::nearest : eka2l1::drivers::filter_option::linear;
+    const bool kiosk = state.kiosk.enabled;
+    eka2l1::drivers::filter_option filter = (kiosk || state.conf.nearest_neighbor_filtering) ? eka2l1::drivers::filter_option::nearest : eka2l1::drivers::filter_option::linear;
 
     const auto window_width = state.window->window_fb_size().x;
     const auto window_height = state.window->window_fb_size().y;
@@ -180,7 +193,7 @@ static void draw_emulator_screen(void *userdata, eka2l1::epoc::screen *scr, cons
     builder.set_swapchain_size(swapchain_size);
     builder.backup_state();
 
-    eka2l1::vec4 color_clear = eka2l1::common::rgba_to_vec(state.conf.display_background_color.load());
+    eka2l1::vec4 color_clear = eka2l1::common::rgba_to_vec(kiosk ? state.kiosk.background : state.conf.display_background_color.load());
 
     // The format that is stored is same as how it's present in HTML ARGB (from lowest to highest bytes)
     // The normal one that emulator assumes is ABGR (from lowest to highest bytes too)
@@ -191,7 +204,7 @@ static void draw_emulator_screen(void *userdata, eka2l1::epoc::screen *scr, cons
     builder.set_feature(eka2l1::drivers::graphics_feature::clipping, false);
     builder.set_viewport(viewport);
 
-    eka2l1::drivers::handle background_image = state_ptr->ui_main->get_background_image();
+    eka2l1::drivers::handle background_image = kiosk ? 0 : state_ptr->ui_main->get_background_image();
     builder.clear({ color_clear.z / 255.0f, color_clear.y / 255.0f, color_clear.x / 255.0f, color_clear.w / 255.0f, 0.0f, 0.0f }, eka2l1::drivers::draw_buffer_bit_color_buffer);
     if (background_image != 0) {
         eka2l1::rect draw_image_rect;
@@ -222,22 +235,49 @@ static void draw_emulator_screen(void *userdata, eka2l1::epoc::screen *scr, cons
     float mult_y = scr->requested_ui_scale_factor > 0.0f ? scr->requested_ui_scale_factor : (state.stretch_to_fill_display ? (static_cast<float>(window_height) / size.y) : mult_x);
     float width = size.x * mult_x;
     float height = size.y * mult_y;
-    std::uint32_t x = 0;
-    std::uint32_t y = 0;
-    if (!state.stretch_to_fill_display) {
-        if (height > swapchain_size.y) {
-            height = swapchain_size.y;
-            mult_x = mult_y = height / size.y;
-            width = size.x * mult_y;
+    std::int32_t x = 0;
+    std::int32_t y = 0;
+
+    if (kiosk) {
+        // Integer magnification of the screen rendered at its native resolution: every guest
+        // pixel becomes a scale x scale block, at the same place on every launch.
+        const int scale = state.kiosk.scale;
+
+        mult_x = mult_y = static_cast<float>(scale);
+        width = static_cast<float>(size.x * scale);
+        height = static_cast<float>(size.y * scale);
+
+        x = (state.kiosk.offset_x >= 0) ? state.kiosk.offset_x : std::max<std::int32_t>(0, (swapchain_size.x - size.x * scale) / 2);
+        y = (state.kiosk.offset_y >= 0) ? state.kiosk.offset_y : std::max<std::int32_t>(0, (swapchain_size.y - size.y * scale) / 2);
+
+        // Render the guest at 1:1 (not EKA2L1's upscaled rendering), map the pointer by the scale.
+        scr->try_change_display_rescale(state_ptr->graphics_driver.get(), 1.0f);
+        scr->logic_scale_factor_x = mult_x;
+        scr->logic_scale_factor_y = mult_y;
+    } else {
+        if (!state.stretch_to_fill_display) {
+            if (height > swapchain_size.y) {
+                height = swapchain_size.y;
+                mult_x = mult_y = height / size.y;
+                width = size.x * mult_y;
+            }
         }
+
+        x = static_cast<std::int32_t>((swapchain_size.x - width) / 2);
+        y = static_cast<std::int32_t>((swapchain_size.y - height) / 2);
+
+        scr->set_native_scale_factor(state_ptr->graphics_driver.get(), mult_x, mult_y);
     }
 
-    x = (swapchain_size.x - width) / 2;
-    y = (swapchain_size.y - height) / 2;
-
-    scr->set_native_scale_factor(state_ptr->graphics_driver.get(), mult_x, mult_y);
     scr->absolute_pos.x = static_cast<int>(x);
     scr->absolute_pos.y = static_cast<int>(y);
+
+    state.view_x = x;
+    state.view_y = y;
+    state.view_width = static_cast<int>(width);
+    state.view_height = static_cast<int>(height);
+    state.screen_width = crr_mode.size.x;
+    state.screen_height = crr_mode.size.y;
 
     dest.top = eka2l1::vec2(x, y);
     dest.size = eka2l1::vec2(width, height);
@@ -255,7 +295,7 @@ static void draw_emulator_screen(void *userdata, eka2l1::epoc::screen *scr, cons
     builder.set_texture_filter(scr->screen_texture, false, filter);
 
     builder.draw_bitmap(scr->screen_texture, 0, dest, src, eka2l1::vec2(0, 0), static_cast<float>(scr->ui_rotation),
-        (scr->flags_ & eka2l1::epoc::screen::FLAG_SCREEN_UPSCALE_FACTOR_LOCK) ? eka2l1::drivers::bitmap_draw_flag_use_upscale_shader : 0);
+        (!kiosk && (scr->flags_ & eka2l1::epoc::screen::FLAG_SCREEN_UPSCALE_FACTOR_LOCK)) ? eka2l1::drivers::bitmap_draw_flag_use_upscale_shader : 0);
 
     if (state_ptr->ui_main) {
         builder.set_viewport(dest);
@@ -271,6 +311,8 @@ static void draw_emulator_screen(void *userdata, eka2l1::epoc::screen *scr, cons
 
     eka2l1::drivers::command_list retrieved = builder.retrieve_command_list();
     state.graphics_driver->submit_command_list(retrieved);
+
+    state.frames_presented++;
 }
 
 
@@ -296,12 +338,17 @@ main_window::main_window(QApplication &application, QWidget *parent, eka2l1::des
     , displayer_(nullptr)
     , background_image_texture_(0)
     , rpc_(this) {
+    if (is_kiosk()) {
+        // Before any native window exists: the display widget below creates this one.
+        setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
+    }
+
     ui_->setupUi(this);
     ui_->label_al_not_available->setVisible(false);
 
     eka2l1::kernel_system *kernel = emulator_state_.symsys->get_kernel_system();
 
-    if (!emulator_state_.app_launch_from_command_line)
+    if (!emulator_state_.app_launch_from_command_line && !is_kiosk())
         setup_app_list();
 
     setup_package_installer_ui_hooks();
@@ -379,19 +426,26 @@ main_window::main_window(QApplication &application, QWidget *parent, eka2l1::des
     addDockWidget(Qt::RightDockWidgetArea, editor_widget_);
     editor_widget_->setVisible(false);
 
-    update_dialog *diag = new update_dialog(this);
-    connect(diag, &update_dialog::exit_for_update_request, this, &main_window::on_exit_for_update_requested);
+    // A scripted start (--run, --kiosk, --no-update-check) never talks to the update server.
+    if (!emulator_state_.no_update_check && !emulator_state_.app_launch_from_command_line && !is_kiosk()) {
+        update_dialog *diag = new update_dialog(this);
+        connect(diag, &update_dialog::exit_for_update_request, this, &main_window::on_exit_for_update_requested);
 
-    diag->check_for_update(false);
+        diag->check_for_update(false);
+    }
 
     //update_notice_dialog::spawn(this);
 
-    restore_ui_layouts();
+    if (!is_kiosk()) {
+        restore_ui_layouts();
+    }
+
     on_theme_change_requested(QString("%1").arg(settings.value(THEME_SETTING_NAME, 0).toInt()));
 
     QVariant no_notify_install = settings.value(NO_TOUCHSCREEN_DISABLE_WARN_SETTING);
 
-    if (!no_notify_install.isValid() || !no_notify_install.toBool()) {
+    // No modal on a scripted start: it would sit over the emulated screen until someone clicks it.
+    if ((!no_notify_install.isValid() || !no_notify_install.toBool()) && !emulator_state_.app_launch_from_command_line && !is_kiosk()) {
         for (auto &bind : emulator_state_.conf.keybinds.keybinds) {
             if (bind.source.type == eka2l1::config::KEYBIND_TYPE_MOUSE) {
                 make_dialog_with_checkbox_and_choices(
@@ -413,7 +467,10 @@ main_window::main_window(QApplication &application, QWidget *parent, eka2l1::des
     emulator_state_.conf.display_background_color = default_color.rgba();
 
     tray_icon_->setIcon(emu_icon_);
-    tray_icon_->show();
+
+    if (!is_kiosk()) {
+        tray_icon_->show();
+    }
 
     connect(ui_->action_about, &QAction::triggered, this, &main_window::on_about_triggered);
     connect(ui_->action_settings, &QAction::triggered, this, &main_window::on_settings_triggered);
@@ -446,7 +503,101 @@ main_window::main_window(QApplication &application, QWidget *parent, eka2l1::des
 
     connect(editor_widget_, &editor_widget::editor_hidden, this, &main_window::on_mapping_editor_hidden);
 
-    setAcceptDrops(true);
+    if (is_kiosk()) {
+        setup_kiosk_presentation();
+    } else {
+        setAcceptDrops(true);
+    }
+}
+
+bool main_window::is_kiosk() const {
+    return emulator_state_.kiosk.enabled;
+}
+
+void main_window::setup_kiosk_presentation() {
+    eka2l1::desktop::kiosk_options &kiosk = emulator_state_.kiosk;
+
+    // Nothing of the host UI may take a key meant for the guest: Ctrl+F toggled the host
+    // fullscreen, and on the 9300 keyboard it is an ordinary Ctrl chord. The menu bar is
+    // hidden and disabled too, so none of its Alt mnemonics can fire.
+    for (QAction *action : findChildren<QAction *>()) {
+        action->setShortcut(QKeySequence());
+    }
+
+    removeAction(ui_->action_fullscreen);
+    ui_->action_fullscreen->setEnabled(false);
+
+    ui_->menu_bar->setVisible(false);
+    ui_->menu_bar->setEnabled(false);
+    ui_->status_bar->setVisible(false);
+    ui_->label_al_not_available->setVisible(false);
+    editor_widget_->setVisible(false);
+
+    if (applist_) {
+        applist_->setVisible(false);
+    }
+
+    ui_->layout_centralwidget->setContentsMargins(0, 0, 0, 0);
+    ui_->layout_centralwidget->setSpacing(0);
+    ui_->layout_main->setContentsMargins(0, 0, 0, 0);
+    ui_->layout_main->setSpacing(0);
+
+    QPalette pal = palette();
+    pal.setColor(QPalette::Window, QColor::fromRgba(kiosk.background));
+    setPalette(pal);
+    setAutoFillBackground(true);
+
+    // The screen is known before the guest draws: its modes come from the ROM's wsini.ini.
+    int screen_w = 640;
+    int screen_h = 200;
+
+    if (eka2l1::kernel_system *kern = emulator_state_.symsys->get_kernel_system()) {
+        const std::lock_guard<eka2l1::kernel_system> guard(*kern);
+
+        if (eka2l1::epoc::screen *scr = get_current_active_screen()) {
+            eka2l1::vec2 size = scr->current_mode().size;
+            if ((scr->ui_rotation % 180) != 0) {
+                std::swap(size.x, size.y);
+            }
+
+            screen_w = size.x;
+            screen_h = size.y;
+        }
+    }
+
+    const int window_w = (kiosk.window_width > 0) ? kiosk.window_width : screen_w * kiosk.scale;
+    const int window_h = (kiosk.window_height > 0) ? kiosk.window_height : screen_h * kiosk.scale;
+
+    emulator_state_.screen_width = screen_w;
+    emulator_state_.screen_height = screen_h;
+
+    const int view_x = (kiosk.offset_x >= 0) ? kiosk.offset_x : std::max(0, (window_w - screen_w * kiosk.scale) / 2);
+    const int view_y = (kiosk.offset_y >= 0) ? kiosk.offset_y : std::max(0, (window_h - screen_h * kiosk.scale) / 2);
+
+    emulator_state_.view_x = view_x;
+    emulator_state_.view_y = view_y;
+    emulator_state_.view_width = screen_w * kiosk.scale;
+    emulator_state_.view_height = screen_h * kiosk.scale;
+
+    if ((view_x + screen_w * kiosk.scale > window_w) || (view_y + screen_h * kiosk.scale > window_h)) {
+        LOG_WARN(eka2l1::FRONTEND_UI, "Kiosk: the {}x{} screen at scale {} and offset {},{} does not fit a {}x{} window; it is clipped",
+            screen_w, screen_h, kiosk.scale, view_x, view_y, window_w, window_h);
+    }
+
+    setMinimumSize(window_w, window_h);
+    setMaximumSize(window_w, window_h);
+    resize(window_w, window_h);
+    move(kiosk.window_x, kiosk.window_y);
+
+    displayer_->setMinimumSize(window_w, window_h);
+    displayer_->setMaximumSize(window_w, window_h);
+    displayer_->setCursor(Qt::BlankCursor);
+    displayer_->setVisible(true);
+    displayer_->setFocus();
+
+    LOG_INFO(eka2l1::FRONTEND_UI, "Kiosk: window {}x{}+{}+{}, screen {}x{} x{} at {},{} in the window, background #{:06X}",
+        window_w, window_h, kiosk.window_x, kiosk.window_y, screen_w, screen_h, kiosk.scale, view_x, view_y,
+        kiosk.background & 0xFFFFFF);
 }
 
 void main_window::setup_app_list(const bool load_now) {
@@ -830,7 +981,7 @@ void main_window::on_install_ngage_card_game_clicked() {
 }
 
 void main_window::on_fullscreen_toogled(bool checked) {
-    if (!displayer_->isVisible()) {
+    if (!displayer_->isVisible() || is_kiosk()) {
         return;
     }
 
@@ -1054,7 +1205,10 @@ void main_window::setup_screen_draw() {
         if (scr) {
             active_screen_draw_callback_ = scr->add_screen_redraw_callback(&emulator_state_, [this](void *userdata, eka2l1::epoc::screen *scr, const bool is_dsa) {
                 draw_emulator_screen(userdata, scr, is_dsa, true);
-                emit status_bar_update(scr->last_fps);
+
+                if (!is_kiosk()) {
+                    emit status_bar_update(scr->last_fps);
+                }
             });
 
             active_screen_mode_change_callback_ = scr->add_screen_mode_change_callback(&emulator_state_, mode_change_screen);
@@ -1075,6 +1229,16 @@ void main_window::switch_to_game_display_mode() {
     else
         ui_->label_al_not_available->setVisible(false);
 
+    if (is_kiosk()) {
+        // setup_kiosk_presentation() fixed the window already; no saved layout may move it.
+        // Without a window manager nothing else gives the window the X input focus, and the
+        // station's XTEST keys go to the focus window.
+        displayer_->setVisible(true);
+        activateWindow();
+        displayer_->setFocus();
+        return;
+    }
+
     save_ui_layouts();
 
     displayer_->setVisible(true);
@@ -1093,6 +1257,29 @@ void main_window::switch_to_game_display_mode() {
 void main_window::on_app_exited(const int exit_type, const int exit_reason, const QString exit_category) {
     const eka2l1::kernel::entity_exit_type exit_type_enum = static_cast<eka2l1::kernel::entity_exit_type>(exit_type);
     bool shown_msg = false;
+
+    if (is_kiosk()) {
+        LOG_INFO(eka2l1::FRONTEND_UI, "Kiosk: an app exited (type {}, {} {})", exit_type, exit_category.toStdString(), exit_reason);
+
+        // The window server has already put the next app in front, if there is one.
+        if (!eka2l1::desktop::list_running_apps(emulator_state_, false).empty()) {
+            return;
+        }
+
+        const std::string &home = emulator_state_.kiosk.home_app;
+        if (!home.empty()) {
+            std::string err;
+            if (eka2l1::desktop::launch_app(emulator_state_, home, true, nullptr, &err)) {
+                return;
+            }
+
+            LOG_ERROR(eka2l1::FRONTEND_UI, "Kiosk: relaunching the home app {} failed: {}", home, err);
+        }
+
+        // No home app (or it cannot start): quit with 0 and let the station's supervisor relaunch.
+        QCoreApplication::quit();
+        return;
+    }
 
     if (exit_type_enum == eka2l1::kernel::entity_exit_type::kill) {
         if ((exit_reason == 0) || (exit_category == QStringLiteral("None"))) {
@@ -1137,6 +1324,10 @@ std::function<void(eka2l1::kernel::process *)> main_window::get_process_exit_cal
     // Qt also refuses to queue an unregistered pointer type, which used to drop the signal
     // entirely and leave the window stuck on the dead app instead of the application list.
     return [this](eka2l1::kernel::process *proc) {
+        if (resetting_) {
+            return;
+        }
+
         emit app_exited(static_cast<int>(proc->get_exit_type()), proc->get_exit_reason(),
             QString::fromStdU16String(proc->get_exit_category()));
     };
@@ -1303,7 +1494,9 @@ void main_window::resizeEvent(QResizeEvent *event) {
         return;
     }
 
-    save_ui_layouts();
+    if (!is_kiosk()) {
+        save_ui_layouts();
+    }
 
     eka2l1::system *system = emulator_state_.symsys.get();
     if (system) {
@@ -1338,7 +1531,9 @@ void main_window::dropEvent(QDropEvent *event) {
 }
 
 void main_window::closeEvent(QCloseEvent *event) {
-    save_ui_layouts();
+    if (!is_kiosk()) {
+        save_ui_layouts();
+    }
 }
 
 bool main_window::controller_event_handler(eka2l1::drivers::input_event &event) {
@@ -1562,7 +1757,8 @@ void main_window::restore_ui_layouts() {
 }
 
 bool main_window::input_dialog_open(const std::u16string &inital_text, const int max_length, eka2l1::drivers::ui::input_dialog_complete_callback complete_callback) {
-    if (input_complete_callback_) {
+    // A host text box has no place on a kiosk: the visitor only has the emulated keyboard.
+    if (input_complete_callback_ || is_kiosk()) {
         return false;
     }
 
@@ -1935,10 +2131,164 @@ eka2l1::drivers::handle main_window::get_background_image() {
 }
 
 void main_window::on_question_dialog_open_request() {
+    if (is_kiosk()) {
+        // No host dialog over the exhibit: answer the guest's notifier with its first button
+        // (0), here on the GUI thread - the callback takes the kernel lock.
+        LOG_WARN(eka2l1::FRONTEND_UI, "Kiosk: guest notifier \"{}\" answered with its first button \"{}\"",
+            eka2l1::common::ucs2_to_utf8(question_dialog_text_), eka2l1::common::ucs2_to_utf8(question_dialog_button1_text_));
+
+        if (question_dialog_complete_callback_) {
+            question_dialog_complete_callback_(0);
+        }
+
+        return;
+    }
+
     message_box_asyncable_close *msg_box = new message_box_asyncable_close(this, question_dialog_text_, question_dialog_button1_text_,
         question_dialog_button2_text_, question_dialog_complete_callback_);
 
     msg_box->show();
+}
+
+void main_window::detach_screen_callbacks() {
+    eka2l1::epoc::screen *scr = get_current_active_screen();
+
+    if (scr) {
+        scr->remove_screen_mode_change_callback(active_screen_mode_change_callback_);
+        scr->remove_screen_redraw_callback(active_screen_draw_callback_);
+        scr->remove_focus_change_callback(active_screen_focus_change_callback_);
+    }
+
+    active_screen_draw_callback_ = 0;
+    active_screen_mode_change_callback_ = 0;
+    active_screen_focus_change_callback_ = 0;
+}
+
+bool main_window::museum_screenshot(const std::string &path, const bool native, std::string *detail) {
+    QScreen *host_screen = displayer_->screen();
+    if (!host_screen) {
+        *detail = "no host screen";
+        return false;
+    }
+
+    // The display widget's own X window: the pixels an X11 capture of the station reads.
+    QPixmap shot = host_screen->grabWindow(displayer_->winId());
+    if (shot.isNull()) {
+        *detail = "grabbing the display window failed";
+        return false;
+    }
+
+    if (native) {
+        const QRect view(emulator_state_.view_x.load(), emulator_state_.view_y.load(), emulator_state_.view_width.load(),
+            emulator_state_.view_height.load());
+        const int screen_w = emulator_state_.screen_width.load();
+        const int screen_h = emulator_state_.screen_height.load();
+
+        if (view.isEmpty() || (screen_w <= 0) || (screen_h <= 0)) {
+            *detail = "nothing presented yet";
+            return false;
+        }
+
+        // Nearest-neighbour back down: exact guest pixels when the magnification is an integer.
+        shot = shot.copy(view).scaled(screen_w, screen_h, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+    }
+
+    if (!shot.save(QString::fromStdString(path), "PNG")) {
+        *detail = "cannot write " + path;
+        return false;
+    }
+
+    *detail = path + " " + std::to_string(shot.width()) + "x" + std::to_string(shot.height());
+    return true;
+}
+
+bool main_window::museum_reset(std::string *err) {
+    eka2l1::system *system = emulator_state_.symsys.get();
+    if (!system) {
+        *err = "no system";
+        return false;
+    }
+
+    // The screen dies with the kernel; take the draw hooks off it first.
+    detach_screen_callbacks();
+
+    resetting_ = true;
+    const bool reset_ok = system->reset();
+    resetting_ = false;
+
+    if (!reset_ok) {
+        *err = "the system reset failed";
+        return false;
+    }
+
+    reprepare_touch_mappings();
+
+    if (eka2l1::window_server *server = get_window_server_through_system(system)) {
+        server->init_key_mappings();
+    }
+
+    setup_screen_draw();
+
+    const std::string spec = !emulator_state_.kiosk.home_app.empty() ? emulator_state_.kiosk.home_app : emulator_state_.launch_spec_;
+    if (spec.empty()) {
+        return true;
+    }
+
+    eka2l1::desktop::running_app launched;
+    if (!eka2l1::desktop::launch_app(emulator_state_, spec, true, &launched, err)) {
+        return false;
+    }
+
+    // After a reset the relaunched app's first compositions came out black until something
+    // recomposed the screen (measured: Desk stayed black until an ordinal change). Recompose
+    // once, when the app has the focus and its presents have stopped for a second.
+    QTimer *watch = new QTimer(this);
+    watch->setInterval(250);
+
+    const std::uint32_t uid = launched.uid;
+    const auto started = std::chrono::steady_clock::now();
+    auto last_frames = std::make_shared<std::uint64_t>(emulator_state_.frames_presented.load());
+    auto last_change = std::make_shared<std::chrono::steady_clock::time_point>(started);
+    auto seen_frames = std::make_shared<bool>(false);
+
+    connect(watch, &QTimer::timeout, this, [this, watch, uid, started, last_frames, last_change, seen_frames]() {
+        const auto now = std::chrono::steady_clock::now();
+        const std::uint64_t frames = emulator_state_.frames_presented.load();
+
+        if (frames != *last_frames) {
+            *last_frames = frames;
+            *last_change = now;
+            *seen_frames = true;
+        }
+
+        bool focused = false;
+        for (const eka2l1::desktop::running_app &app : eka2l1::desktop::list_running_apps(emulator_state_, false)) {
+            if ((app.uid == uid) && app.focus) {
+                focused = true;
+            }
+        }
+
+        const bool settled = *seen_frames && ((now - *last_change) >= std::chrono::seconds(1));
+        const bool expired = (now - started) >= std::chrono::seconds(30);
+
+        if ((focused && settled) || expired) {
+            watch->stop();
+            watch->deleteLater();
+
+            std::string refresh_err;
+            if (!expired && !eka2l1::desktop::refresh_screen(emulator_state_, &refresh_err)) {
+                LOG_WARN(eka2l1::FRONTEND_UI, "Kiosk: recomposing after the reset failed: {}", refresh_err);
+            }
+        }
+    });
+
+    watch->start();
+    return true;
+}
+
+std::uint64_t main_window::museum_guest_fps() {
+    eka2l1::epoc::screen *scr = get_current_active_screen();
+    return scr ? scr->last_fps : 0;
 }
 
 void main_window::question_dialog_open(const std::u16string &text, const std::u16string &button1_text, const std::u16string &button2_text,

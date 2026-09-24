@@ -22,6 +22,7 @@
 #include <common/path.h>
 #include <common/pystr.h>
 #include <qt/cmdhandler.h>
+#include <qt/kiosk.h>
 #include <qt/mainwindow.h>
 #include <qt/state.h>
 #include <system/devices.h>
@@ -43,6 +44,7 @@
 #include <vfs/vfs.h>
 #include <qt/utils.h>
 
+#include <cstdio>
 #include <iostream>
 
 using namespace eka2l1;
@@ -60,11 +62,24 @@ bool app_install_option_handler(eka2l1::common::arg_parser *parser, void *userda
     // Since it's inconvenient for user to specify the drive (they are all the same on computer),
     // and it's better to install in C since there is many apps required
     // to be in it and hardcoded the drive, just hardcode drive E here.
-    bool result = emu->symsys->install_package(common::utf8_to_ucs2(path), drive_e);
+    // installation_result_success is 0: compare, don't convert the enum to bool.
+    const bool result = emu->symsys->install_package(common::utf8_to_ucs2(path), drive_e)
+        == package::installation_result_success;
 
     if (!result) {
         *err = "Installation of SIS failed";
         return false;
+    }
+
+    // The app list was loaded at boot. Rescan so a following --run sees the app
+    // this package just registered, as the GUI install path does.
+    kernel_system *kern = emu->symsys->get_kernel_system();
+    if (kern) {
+        auto *svr = reinterpret_cast<eka2l1::applist_server *>(kern->get_by_name<service::server>(
+            get_app_list_server_name_by_epocver(kern->get_epoc_version())));
+        if (svr) {
+            svr->rescan_registries(emu->symsys->get_io_system());
+        }
     }
 
     return true;
@@ -141,8 +156,7 @@ bool app_specifier_option_handler(eka2l1::common::arg_parser *parser, void *user
 
     // It's an UID if it's starting with 0x
     if (tokstr.length() > 2 && tokstr.substr(0, 2) == "0x") {
-        const std::uint32_t uid = common::pystr(tokstr).as_int<std::uint32_t>();
-        eka2l1::apa_app_registry *registry = svr->get_registration(uid);
+        eka2l1::apa_app_registry *registry = desktop::find_app_registry(svr, tokstr, err);
 
         if (registry) {
             // Load the app
@@ -155,14 +169,11 @@ bool app_specifier_option_handler(eka2l1::common::arg_parser *parser, void *user
 
             emu->app_launch_from_command_line = true;
             emu->launched_app_name_ = common::ucs2_to_utf8(registry->mandatory_info.long_caption.to_std_string(nullptr));
+            emu->launched_app_uid_ = registry->mandatory_info.uid;
+            emu->launch_spec_ = tokstr;
 
             return true;
         }
-
-        // Load
-        *err = "App with UID: ";
-        *err += tokstr;
-        *err += " doesn't exist";
     } else {
         if (eka2l1::has_root_dir(tokstr)) {
             process_ptr pr = kern->spawn_new_process(common::utf8_to_ucs2(tokstr), common::utf8_to_ucs2(cmdlinestr));
@@ -183,31 +194,26 @@ bool app_specifier_option_handler(eka2l1::common::arg_parser *parser, void *user
             return true;
         }
 
-        // Load with name
-        std::vector<apa_app_registry> &regs = svr->get_registerations();
+        // Load with name: the long caption, then the short one, then either without case.
+        eka2l1::apa_app_registry *reg = desktop::find_app_registry(svr, tokstr, err);
 
-        for (auto &reg : regs) {
-            if (common::ucs2_to_utf8(reg.mandatory_info.long_caption.to_std_string(nullptr))
-                == tokstr) {
-                // Load the app
-                epoc::apa::command_line cmdline;
-                cmdline.launch_cmd_ = epoc::apa::command_create;
+        if (reg) {
+            // Load the app
+            epoc::apa::command_line cmdline;
+            cmdline.launch_cmd_ = epoc::apa::command_create;
 
-                emu->launched_app_name_ = tokstr;
+            emu->launched_app_name_ = common::ucs2_to_utf8(reg->mandatory_info.long_caption.to_std_string(nullptr));
+            emu->launched_app_uid_ = reg->mandatory_info.uid;
+            emu->launch_spec_ = tokstr;
 
-                svr->launch_app(reg, cmdline, nullptr, [emu](kernel::process *pr) {
-                    return emu->ui_main->get_process_exit_callback()(pr);
-                });
+            svr->launch_app(*reg, cmdline, nullptr, [emu](kernel::process *pr) {
+                return emu->ui_main->get_process_exit_callback()(pr);
+            });
 
-                emu->app_launch_from_command_line = true;
+            emu->app_launch_from_command_line = true;
 
-                return true;
-            }
+            return true;
         }
-
-        *err = "No app name found with the name: {}";
-        *err += tokstr;
-        *err += ". Make sure the name is right and try again.";
     }
 
     return false;
@@ -222,6 +228,11 @@ bool list_app_option_handler(eka2l1::common::arg_parser *parser, void *userdata,
     desktop::emulator *emu = reinterpret_cast<desktop::emulator *>(userdata);
     kernel_system *kern = emu->symsys->get_kernel_system();
 
+    if (!kern) {
+        *err = "No device is installed, so there are no apps to list";
+        return false;
+    }
+
     // Get app list server
     eka2l1::applist_server *svr = reinterpret_cast<eka2l1::applist_server *>(kern->get_by_name<service::server>(
         get_app_list_server_name_by_epocver(kern->get_epoc_version())));
@@ -231,7 +242,15 @@ bool list_app_option_handler(eka2l1::common::arg_parser *parser, void *userdata,
         return false;
     }
 
-    [[maybe_unused]] const auto &regs = svr->get_registerations();
+    // One app per line: UID, tab, long caption - the names --run and the control socket accept.
+    for (auto &reg : svr->get_registerations()) {
+        char uid_str[16];
+        std::snprintf(uid_str, sizeof(uid_str), "0x%08x", reg.mandatory_info.uid);
+
+        std::cout << uid_str << '\t' << common::ucs2_to_utf8(reg.mandatory_info.long_caption.to_std_string(nullptr)) << '\n';
+    }
+
+    std::cout.flush();
     return false;
 }
 
@@ -384,6 +403,10 @@ bool device_set_option_handler(eka2l1::common::arg_parser *parser, void *userdat
             found = true;
             break;
         }
+    }
+
+    if (!found) {
+        *err = std::string("No installed device has the firmware code ") + device + " (see --listdevices)";
     }
 
     return found;

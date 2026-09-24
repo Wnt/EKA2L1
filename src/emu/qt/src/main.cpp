@@ -19,10 +19,12 @@
 
 #include <drivers/input/common.h>
 
+#include <qt/kiosk.h>
 #include <qt/state.h>
 #include <qt/thread.h>
 #include <qt/utils.h>
 
+#include <common/arghandler.h>
 #include <common/fileutils.h>
 #include <common/path.h>
 #include <common/platform.h>
@@ -36,6 +38,9 @@
 #include <QStandardPaths>
 #include <QTranslator>
 
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
 #include <memory>
 
 #if EKA2L1_PLATFORM(UNIX)
@@ -56,8 +61,28 @@ static void prefer_selfcontained_media_backend() {
 #endif
 
 int main(int argc, char *argv[]) {
+    // --help answers before anything else: no display connection, no device boot, no data
+    // directory, whatever state the machine is in.
+    for (int i = 1; i < argc; i++) {
+        if ((std::strcmp(argv[i], "--help") == 0) || (std::strcmp(argv[i], "-h") == 0)) {
+            eka2l1::common::arg_parser parser(argc, const_cast<const char **>(argv));
+            eka2l1::desktop::register_command_line_options(parser);
+
+            std::cout << parser.get_help_string();
+            std::cout.flush();
+
+            return 0;
+        }
+    }
+
 #if EKA2L1_PLATFORM(UNIX)
     prefer_selfcontained_media_backend();
+
+    // SDL (initialised for game controllers) otherwise turns SIGTERM and SIGINT into SDL_QUIT
+    // events nobody reads: the process ignored both, and a station could only SIGKILL it.
+    if (qEnvironmentVariableIsEmpty("SDL_NO_SIGNAL_HANDLERS")) {
+        qputenv("SDL_NO_SIGNAL_HANDLERS", "1");
+    }
 #endif
 
     QApplication a(argc, argv);
@@ -98,6 +123,9 @@ int main(int argc, char *argv[]) {
     qRegisterMetaType<eka2l1::drivers::input_event>("eka2l1::drivers::input_event");
 
 #if !EKA2L1_PLATFORM(WIN32)
+    // Relative paths on the command line (--log-file, --control-socket) mean the launch directory.
+    eka2l1::desktop::set_launch_directory(QDir::currentPath().toStdString());
+
     QString data_path = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/EKA2L1/";
     QDir root_dir = QDir::root();
     root_dir.mkpath(data_path);
