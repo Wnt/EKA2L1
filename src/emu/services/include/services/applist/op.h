@@ -74,9 +74,14 @@ namespace eka2l1 {
         applist_request_oldarch_get_file_ownership_infos
     };
 
+    // Symbian 7.0s / 8.0a AppArc server (AppListServer 5.1.117 on Series 80 v2). Unlike 9.x there is no
+    // dummy "first" opcode: GetAllApps() sends 0 and GetEmbeddableApps() sends 1. Verified against the
+    // opcode each RApaLsSession export of the S80 DP2.0 SDK's APGRFX pushes, and against a cold boot of
+    // the SDK emulator to Desk (0 x1, GetNextApp 2 x38, GetAppInfo 5, GetAppCapability 6 x37,
+    // AppIconByUidAndSize 28, SetNotify 25; an application key: 5 then StartApp 7; "Write note": 15).
     enum applist_request_s60v2 {
-        applist_request_s60v2_first = applist_range_unrestricted, // = 0
-        applist_request_s60v2_init_list,
+        applist_request_s60v2_init_full_list = applist_range_unrestricted, // = 0
+        applist_request_s60v2_init_embed_list,
         applist_request_s60v2_get_next_app,
         applist_request_s60v2_embed_count,
         applist_request_s60v2_app_count,
@@ -106,7 +111,10 @@ namespace eka2l1 {
         applist_request_s60v2_app_icon_by_uid_and_size,
         applist_request_s60v2_get_app_icon_sizes,
         applist_request_s60v2_get_app_views, // = 30
-        applist_request_s60v2_view_icon_by_uid_and_size
+        applist_request_s60v2_view_icon_by_uid_and_size,
+        applist_request_s60v2_get_file_ownership_info, // 7.0s
+        applist_request_s60v2_number_of_own_defined_icons, // 7.0s
+        applist_request_s60v2_init_filtered_embed_list // = 34, GetFilteredApps
     };
 
     enum applist_request_transition {
