@@ -2193,7 +2193,9 @@ namespace eka2l1 {
                  group = reinterpret_cast<epoc::window_group *>(group->sibling)) {
                 kernel::process *owner = group->uid_owner_change_process;
 
-                if (!owner || (owner->get_uid() != app_uid)) {
+                // The starter of an app can die before the app's group does (see ~window_group).
+                if (!owner || (kern->get_by_id<kernel::process>(group->uid_owner_change_process_id) != owner)
+                    || (owner->get_uid() != app_uid)) {
                     continue;
                 }
 
