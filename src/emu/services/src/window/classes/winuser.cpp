@@ -948,6 +948,13 @@ namespace eka2l1::epoc {
             break;
         }
 
+        case EWsWinOpClaimPointerGrab: {
+            // Moves an in-progress drag to this window (CWsWindowBase::ClaimPointerGrab). Pointer
+            // events here never start a drag, so there is never a grab to take over.
+            ctx.complete(epoc::error_none);
+            break;
+        }
+
         case EWsWinOpActivate:
             activate(ctx, cmd);
             break;
