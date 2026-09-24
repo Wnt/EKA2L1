@@ -53,6 +53,8 @@ namespace eka2l1::epoc {
 
         std::vector<epoc::event> evts_;
 
+        std::uint32_t s80_modifiers_ = 0; ///< Series 80 keyboard stopgap: Shift/Ctrl/Chr/Caps Lock state.
+
         explicit window_key_shipper(window_server *serv);
 
         /**

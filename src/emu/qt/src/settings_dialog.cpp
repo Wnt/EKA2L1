@@ -80,8 +80,135 @@ static void set_or_add_binding(eka2l1::config::keybind_profile &profile, eka2l1:
     }
 }
 
-void make_default_keybind_profile(eka2l1::config::keybind_profile &profile) {
+// A Series 80 character binding: the key types this character on this 9300 scan code, whatever the state of
+// the host's Shift key (see the keyboard stopgap in services/window/io.cpp).
+static constexpr std::uint32_t s80_character(const std::uint32_t character, const std::uint32_t scan_code) {
+    return (character << 16) | scan_code;
+}
+
+// Nokia 9300 keyboard, UK English as in the ROM's EKDATA.DLL. Letters are plain scan codes and take their case
+// from Shift and Caps Lock; every other key that types a character is a character binding, so any host
+// layout works. Host keys follow the station keymap contract: F1-F4 command buttons, F5-F12 application
+// buttons, F13-F17 joystick centre/up/down/left/right, AltGr (ISO_Level3_Shift) and Alt = Chr.
+static void make_s80_keybind_profile(eka2l1::config::keybind_profile &profile) {
+    using namespace eka2l1::epoc;
+
+    static const std::pair<int, std::uint32_t> S80_KEYBINDS[] = {
+        // Command buttons beside the screen. Command button 4 is a character binding so that the old S80
+        // workaround in the window server (EStdKeyDevice3 becomes Enter) leaves it alone.
+        { Qt::Key_F1, std_key_device_0 },
+        { Qt::Key_F2, std_key_device_1 },
+        { Qt::Key_F3, std_key_device_2 },
+        { Qt::Key_F4, s80_character(key_device_3, std_key_device_3) },
+        // Desk, Telephone, Messaging, Web, Contacts, Documents, Calendar, My own
+        { Qt::Key_F5, std_key_application_0 },
+        { Qt::Key_F6, std_key_application_1 },
+        { Qt::Key_F7, std_key_application_2 },
+        { Qt::Key_F8, std_key_application_3 },
+        { Qt::Key_F9, std_key_application_4 },
+        { Qt::Key_F10, std_key_application_5 },
+        { Qt::Key_F11, std_key_application_6 },
+        { Qt::Key_F12, std_key_application_7 },
+        { Qt::Key_Menu, std_key_menu },
+        // Joystick centre, up, down, left, right; Chr+joystick for the host's navigation keys
+        { Qt::Key_F13, s80_character(key_enter, std_key_device_a) },
+        { Qt::Key_F14, s80_character(key_up_arrow, std_key_device_8) },
+        { Qt::Key_F15, s80_character(key_down_arrow, std_key_device_9) },
+        { Qt::Key_F16, s80_character(key_left_arrow, std_key_device_6) },
+        { Qt::Key_F17, s80_character(key_right_arrow, std_key_device_7) },
+        { Qt::Key_Home, s80_character(key_home, std_key_device_6) },
+        { Qt::Key_End, s80_character(key_end, std_key_device_7) },
+        { Qt::Key_PageUp, s80_character(key_page_up, std_key_device_8) },
+        { Qt::Key_PageDown, s80_character(key_page_down, std_key_device_9) },
+        { Qt::Key_Escape, std_key_escape },
+        { Qt::Key_Backspace, std_key_backspace },
+        { Qt::Key_Delete, s80_character(key_delete, std_key_backspace) },
+        { Qt::Key_Tab, std_key_tab },
+        { Qt::Key_Backtab, s80_character(key_tab, std_key_tab) },
+        { Qt::Key_Return, std_key_enter },
+        { Qt::Key_Enter, s80_character(key_enter, std_key_enter) },
+        { Qt::Key_Space, std_key_space },
+        { Qt::Key_Left, std_key_left_arrow },
+        { Qt::Key_Right, std_key_right_arrow },
+        { Qt::Key_Up, std_key_up_arrow },
+        { Qt::Key_Down, std_key_down_arrow },
+        { Qt::Key_Shift, std_key_left_shift },
+        { Qt::Key_Control, std_key_left_ctrl },
+        { Qt::Key_AltGr, std_key_left_func },
+        { Qt::Key_Alt, std_key_right_func },
+        { Qt::Key_CapsLock, std_key_caps_lock },
+        // The digit row with its Shift and Chr legends
+        { Qt::Key_1, s80_character('1', '1') },
+        { Qt::Key_Exclam, s80_character('!', '1') },
+        { Qt::Key_2, s80_character('2', '2') },
+        { Qt::Key_QuoteDbl, s80_character('"', '2') },
+        { Qt::Key_3, s80_character('3', '3') },
+        { Qt::Key_sterling, s80_character(0xA3, '3') },
+        { Qt::Key_4, s80_character('4', '4') },
+        { Qt::Key_Dollar, s80_character('$', '4') },
+        { 0x20AC, s80_character(0x20AC, '4') }, // Euro sign: Qt has no Key_ name, it reports the code point
+        { Qt::Key_5, s80_character('5', '5') },
+        { Qt::Key_Percent, s80_character('%', '5') },
+        { Qt::Key_AsciiCircum, s80_character('^', '5') },
+        { Qt::Key_6, s80_character('6', '6') },
+        { Qt::Key_Minus, s80_character('-', '6') },
+        { Qt::Key_Underscore, s80_character('_', '6') },
+        { Qt::Key_7, s80_character('7', '7') },
+        { Qt::Key_Ampersand, s80_character('&', '7') },
+        { Qt::Key_8, s80_character('8', '8') },
+        { Qt::Key_Asterisk, s80_character('*', '8') },
+        { Qt::Key_9, s80_character('9', '9') },
+        { Qt::Key_ParenLeft, s80_character('(', '9') },
+        { Qt::Key_BracketLeft, s80_character('[', '9') },
+        { Qt::Key_0, s80_character('0', '0') },
+        { Qt::Key_ParenRight, s80_character(')', '0') },
+        { Qt::Key_BracketRight, s80_character(']', '0') },
+        { Qt::Key_Equal, s80_character('=', std_key_equals) },
+        { Qt::Key_Plus, s80_character('+', std_key_equals) },
+        // Punctuation keys with their Shift and Chr legends
+        { Qt::Key_NumberSign, s80_character('#', std_key_hash) },
+        { Qt::Key_AsciiTilde, s80_character('~', std_key_hash) },
+        { Qt::Key_Semicolon, s80_character(';', std_key_semicolon) },
+        { Qt::Key_Colon, s80_character(':', std_key_semicolon) },
+        { Qt::Key_Apostrophe, s80_character('\'', std_key_single_quote) },
+        { Qt::Key_At, s80_character('@', std_key_single_quote) },
+        { Qt::Key_Comma, s80_character(',', std_key_comma) },
+        { Qt::Key_Less, s80_character('<', std_key_comma) },
+        { Qt::Key_Period, s80_character('.', std_key_full_stop) },
+        { Qt::Key_Greater, s80_character('>', std_key_full_stop) },
+        { Qt::Key_Slash, s80_character('/', std_key_forward_slash) },
+        { Qt::Key_Question, s80_character('?', std_key_forward_slash) },
+        { Qt::Key_Backslash, s80_character('\\', std_key_forward_slash) },
+        // Characters the 9300 keyboard has no key for, typed as plain characters
+        { Qt::Key_QuoteLeft, s80_character('`', std_key_null) },
+        { Qt::Key_BraceLeft, s80_character('{', std_key_null) },
+        { Qt::Key_Bar, s80_character('|', std_key_null) },
+        { Qt::Key_BraceRight, s80_character('}', std_key_null) },
+    };
+
+    eka2l1::config::keybind bind;
+    bind.source.type = eka2l1::config::KEYBIND_TYPE_KEY;
+
+    for (int letter = 0; letter < 26; letter++) {
+        bind.source.data.keycode = Qt::Key_A + letter;
+        bind.target = 'A' + letter;
+        profile.keybinds.push_back(bind);
+    }
+
+    for (const auto &[host_key, target] : S80_KEYBINDS) {
+        bind.source.data.keycode = static_cast<std::uint32_t>(host_key);
+        bind.target = target;
+        profile.keybinds.push_back(bind);
+    }
+}
+
+void make_default_keybind_profile(eka2l1::config::keybind_profile &profile, const bool s80_device) {
     profile.keybinds.clear();
+
+    if (s80_device) {
+        make_s80_keybind_profile(profile);
+        return;
+    }
 
     eka2l1::config::keybind bind;
     bind.source.type = eka2l1::config::KEYBIND_TYPE_KEY;
@@ -853,7 +980,7 @@ void settings_dialog::on_control_profile_add_clicked() {
         configuration_.serialize();
 
         configuration_.current_keybind_profile = result.toStdString();
-        make_default_keybind_profile(configuration_.keybinds);
+        make_default_keybind_profile(configuration_.keybinds, system_ && system_->is_s80_device_active());
         configuration_.serialize();
 
         refresh_keybind_profiles();
