@@ -53,6 +53,7 @@ namespace eka2l1 {
             void bind_state(const std::shared_ptr<connection_state> &state, bool monitor = false);
             void attach(service::ipc_context *ctx);
             void start(service::ipc_context *ctx, bool with_preferences);
+            void start_with(service::ipc_context *ctx, const connection_info &info);
             void enumerate(service::ipc_context *ctx);
             void get_info(service::ipc_context *ctx);
             void get_int_setting(service::ipc_context *ctx);
