@@ -21,8 +21,17 @@
 
 class QApplication;
 
+namespace eka2l1::common {
+    class arg_parser;
+}
+
 namespace eka2l1::desktop {
     struct emulator;
+
+    /**
+     * \brief Register every command-line option, so --help can print them all before anything boots.
+     */
+    void register_command_line_options(common::arg_parser &parser);
 
     /**
      * \brief Entry point to the graphics driver thread.

@@ -31,6 +31,7 @@
 #include <common/vecx.h>
 #include <qt/cmdhandler.h>
 #include <qt/displaywidget.h>
+#include <qt/kiosk.h>
 #include <qt/seh_handler.h>
 #include <qt/state.h>
 #include <qt/thread.h>
@@ -46,6 +47,7 @@
 #include <qt/dialog_driver.h>
 
 #include <kernel/kernel.h>
+#include <system/devices.h>
 
 #if EKA2L1_PLATFORM(WIN32)
 #include <Windows.h>
@@ -55,6 +57,9 @@
 #include <QWindow>
 
 #include <qt/mainwindow.h>
+
+#include <chrono>
+#include <cstdlib>
 #include <iostream>
 
 static eka2l1::drivers::input_event make_mouse_event_driver(const float x, const float y, const float z, const int button, const int action,
@@ -166,7 +171,11 @@ namespace eka2l1::desktop {
         state.window->button_pressed = on_ui_window_key_press;
         state.window->button_released = on_ui_window_key_release;
 
-        state.window->init("Emulator display", eka2l1::vec2(800, 600), drivers::emu_window_flag_maximum_size);
+        // A kiosk display already has its final size; resizing it here would only race the layout.
+        const eka2l1::vec2 initial_size = state.kiosk.enabled ? eka2l1::vec2(state.window->window_size())
+                                                              : eka2l1::vec2(800, 600);
+
+        state.window->init("Emulator display", initial_size, drivers::emu_window_flag_maximum_size);
         state.window->set_userdata(&state);
 
         // We got window and context ready (OpenGL, let makes stuff now)
@@ -352,15 +361,7 @@ namespace eka2l1::desktop {
         state.kill_event.set();
     }
 
-    int emulator_entry(QApplication &application, emulator &state, const int argc, const char **argv) {
-        state.stage_one();
-
-        // Instantiate UI and High-level interface threads
-        std::thread os_thread_obj(os_thread, std::ref(state));
-        state.init_done_event.wait();
-
-        eka2l1::common::arg_parser parser(argc, argv);
-
+    void register_command_line_options(common::arg_parser &parser) {
         parser.add("--help, -h", "Display helps menu", help_option_handler);
         parser.add("--listapp", "List all installed applications", list_app_option_handler);
         parser.add("--listdevices", "List all installed devices", list_devices_option_handler);
@@ -390,25 +391,92 @@ namespace eka2l1::desktop {
         parser.add("--gendocs", "Generate Python documentation", python_docgen_option_handler);
 #endif
 
+        register_museum_options(parser);
+    }
+
+    // Leave before the UI exists: release the OS thread from whichever wait it is in (the first
+    // graphics handshake, or - with no device - the stage two retry), then let it exit.
+    static int quit_before_ui(emulator &state, std::thread &os_thread_obj, const int code) {
+        state.should_emu_quit = true;
+
+        state.graphics_event.set();
+        state.init_event.set();
+        state.kill_event.set();
+
+        os_thread_obj.join();
+        return code;
+    }
+
+    int emulator_entry(QApplication &application, emulator &state, const int argc, const char **argv) {
+        // The logger comes up in stage one: its file and filter have to be known before that.
+        prescan_early_options(state, argc, argv);
+
+        state.stage_one();
+
+        // Instantiate UI and High-level interface threads
+        std::thread os_thread_obj(os_thread, std::ref(state));
+        state.init_done_event.wait();
+
+        eka2l1::common::arg_parser parser(argc, argv);
+        register_command_line_options(parser);
+
         if (argc > 1) {
             std::string err;
-            state.should_emu_quit = !parser.parse(&state, &err);
 
-            if (state.should_emu_quit) {
-                // Notify the OS thread that is still sleeping, waiting for
-                // graphics sema to be freed.
-                state.graphics_event.set();
-                state.kill_event.set();
+            if (!parser.parse(&state, &err)) {
+                // A listing option (--listdevices, --listapp) stops the parse with no error: exit 0.
+                if (!err.empty()) {
+                    std::cerr << err << std::endl;
+                }
 
-                std::cout << err << std::endl;
-                os_thread_obj.join();
+                return quit_before_ui(state, os_thread_obj, err.empty() ? 0 : 1);
+            }
+        }
 
-                return -1;
+        if (state.kiosk.enabled) {
+            if (!state.symsys->get_device_manager()->get_current()) {
+                std::cerr << "--kiosk needs an installed device (see --listdevices); refusing to show an empty kiosk" << std::endl;
+                return quit_before_ui(state, os_thread_obj, 1);
+            }
+
+            // No --run: the home app is the exhibit.
+            if (!state.app_launch_from_command_line && !state.kiosk.home_app.empty()) {
+                std::string err;
+                running_app launched;
+
+                if (!launch_app(state, state.kiosk.home_app, true, &launched, &err)) {
+                    std::cerr << "--kiosk-home " << state.kiosk.home_app << ": " << err << std::endl;
+                    return quit_before_ui(state, os_thread_obj, 1);
+                }
+
+                state.app_launch_from_command_line = true;
+                state.launched_app_name_ = launched.name;
+                state.launched_app_uid_ = launched.uid;
+                state.launch_spec_ = state.kiosk.home_app;
             }
         }
 
         state.ui_main = new main_window(application, nullptr, state);
         state.ui_main->setWindowTitle(get_emulator_window_title());
+
+        if (!state.control_socket_path.empty()) {
+            // Asked for a control channel: fail loudly rather than run without one.
+            std::string err;
+            state.control = new control_server(state);
+
+            if (!state.control->listen(state.control_socket_path, &err)) {
+                std::cerr << "--control-socket " << state.control_socket_path << ": " << err << std::endl;
+
+                delete state.control;
+                state.control = nullptr;
+
+                delete state.ui_main;
+                state.ui_main = nullptr;
+
+                return quit_before_ui(state, os_thread_obj, 1);
+            }
+        }
+
         state.ui_main->load_and_show();
 
         eka2l1::drivers::ui::main_window_instance = state.ui_main;
@@ -416,7 +484,7 @@ namespace eka2l1::desktop {
 
         std::thread graphics_thread_obj(graphics_driver_thread, std::ref(state));
 
-        if (state.app_launch_from_command_line) {
+        if (state.app_launch_from_command_line || state.kiosk.enabled) {
             if (!state.launched_app_name_.empty()) {
                 state.ui_main->set_discord_presence_current_playing(state.launched_app_name_);
             }
@@ -424,6 +492,20 @@ namespace eka2l1::desktop {
         }
 
         const int exec_code = application.exec();
+
+        // A shutdown that wedges (a guest thread the kernel cannot stop, a driver waiting on a
+        // present that never comes) must not keep a station from relaunching.
+        std::thread([exec_code]() {
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+            std::cerr << "EKA2L1: shutdown did not finish in 10 s; exiting anyway" << std::endl;
+            std::_Exit(exec_code);
+        }).detach();
+
+        if (state.control) {
+            delete state.control;
+            state.control = nullptr;
+        }
+
         kill_emulator(state);
 
         // Wait for OS thread to die

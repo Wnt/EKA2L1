@@ -79,6 +79,7 @@ set(PROJECT_SOURCES
         include/qt/seh_handler.h
         include/qt/settings_dialog.h
         include/qt/host_overrides.h
+        include/qt/kiosk.h
         include/qt/state.h
         include/qt/symbian_input_dialog.h
         include/qt/thread.h
@@ -117,6 +118,7 @@ set(PROJECT_SOURCES
         src/seh_handler.cpp
         src/settings_dialog.cpp
         src/host_overrides.cpp
+        src/kiosk.cpp
         src/settings_dialog.ui
         src/state.cpp
         src/symbian_input_dialog.cpp

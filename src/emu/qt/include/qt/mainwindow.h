@@ -31,6 +31,7 @@
 #include <QPointer>
 #include <QProgressDialog>
 #include <QSystemTrayIcon>
+#include <atomic>
 #include <memory>
 #include <map>
 
@@ -134,6 +135,9 @@ private:
 
     eka2l1::qt::discord_rpc rpc_;
 
+    // Set while museum_reset() tears the kernel down: the processes it kills are not app exits.
+    std::atomic<bool> resetting_{ false };
+
     void setup_screen_draw();
     void setup_app_list(const bool load_now = false);
     void setup_package_installer_ui_hooks();
@@ -155,6 +159,10 @@ private:
     void save_ui_layouts();
     void restore_ui_layouts();
     bool load_background_image(const std::string &path);
+
+    bool is_kiosk() const;
+    void setup_kiosk_presentation();
+    void detach_screen_callbacks();
 
 private slots:
     void on_about_triggered();
@@ -263,6 +271,11 @@ public:
     eka2l1::drivers::handle get_background_image();
 
     std::function<void(eka2l1::kernel::process *)> get_process_exit_callback();
+
+    // Museum frontend (qt/kiosk.h): called on the GUI thread by the control channel.
+    bool museum_screenshot(const std::string &path, const bool native, std::string *detail);
+    bool museum_reset(std::string *err);
+    std::uint64_t museum_guest_fps();
 
 private:
     Ui::main_window *ui_;

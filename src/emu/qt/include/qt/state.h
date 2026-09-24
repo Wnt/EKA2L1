@@ -56,6 +56,32 @@ namespace eka2l1 {
 class main_window;
 
 namespace eka2l1::desktop {
+    class control_server;
+
+    /**
+     * \brief Museum kiosk presentation (--kiosk and friends).
+     *
+     * The window carries nothing but the emulated screen: no menu bar, status bar, frame,
+     * tray icon or dialog. The screen is rendered at its native resolution and magnified by
+     * an integer factor with nearest-neighbour filtering, at a fixed place in a window of a
+     * fixed size and position, so every launch has the same geometry.
+     */
+    struct kiosk_options {
+        bool enabled = false;
+
+        int scale = 2;                  ///< Integer magnification of the emulated screen.
+        bool geometry_given = false;
+        int window_x = 0;               ///< Window position on the X screen.
+        int window_y = 0;
+        int window_width = 0;           ///< 0: the magnified screen's width.
+        int window_height = 0;          ///< 0: the magnified screen's height.
+        int offset_x = -1;              ///< Screen position inside the window, -1: centred.
+        int offset_y = -1;
+        std::uint32_t background = 0xFF000000; ///< ARGB fill around the screen.
+
+        std::string home_app;           ///< App relaunched when the command-line app exits.
+    };
+
     /**
      * \brief State of the emulator on desktop.
      */
@@ -100,6 +126,30 @@ namespace eka2l1::desktop {
         int present_status;
 
         std::string launched_app_name_;
+        std::uint32_t launched_app_uid_ = 0;   ///< UID of the app --run started, 0 if a path.
+
+        kiosk_options kiosk;
+
+        std::string control_socket_path;        ///< --control-socket: ekactl/1 listener.
+        control_server *control = nullptr;
+
+        std::string log_file_path;              ///< --log-file: replaces EKA2L1.log in the data dir.
+        std::string log_filter_override;        ///< --log-filter: replaces config.yml's log-filter.
+        bool console_log = true;                ///< --no-console-log clears it.
+        bool no_update_check = false;           ///< --no-update-check (implied by --kiosk and --run).
+
+        std::atomic<std::uint64_t> frames_presented{ 0 }; ///< Screen redraws handed to the display.
+
+        // Where the last present put the emulated screen inside the display widget, and the
+        // screen's own size - what a screenshot crops and a client scales pointer coordinates by.
+        std::atomic<int> view_x{ 0 };
+        std::atomic<int> view_y{ 0 };
+        std::atomic<int> view_width{ 0 };
+        std::atomic<int> view_height{ 0 };
+        std::atomic<int> screen_width{ 0 };
+        std::atomic<int> screen_height{ 0 };
+
+        std::string launch_spec_;               ///< What --run was given, relaunched by "reset".
 
         explicit emulator();
 
