@@ -483,6 +483,12 @@ namespace eka2l1::epoc {
         builder_.set_texture_filter(source_bitmap_drv, false, texture_filter_);
         builder_.set_texture_filter(source_bitmap_drv, true, texture_filter_);
 
+        if (cmd.gdi_flags_ & GDI_STORE_COMMAND_TILE) {
+            // Patterned brush: the source rectangle runs past the bitmap, the sampler wraps it.
+            builder_.set_texture_addressing_mode(source_bitmap_drv, drivers::addressing_direction::s, drivers::addressing_option::repeat);
+            builder_.set_texture_addressing_mode(source_bitmap_drv, drivers::addressing_direction::t, drivers::addressing_option::repeat);
+        }
+
         if (mask_bitmap_drv) {
             builder_.set_texture_filter(mask_bitmap_drv, false, texture_filter_);
             builder_.set_texture_filter(mask_bitmap_drv, true, texture_filter_);
