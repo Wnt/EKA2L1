@@ -1094,6 +1094,11 @@ namespace eka2l1::epoc {
         return { get_ws().get_kernel_system()->get_epoc_version(), client_version() };
     }
 
+    // RWsSession::SetBackgroundColor / GetBackgroundColor: the colour behind every window (a TRgb value,
+    // white until someone sets it). Nothing draws it yet; clients only read it back. One window server
+    // per emulator, so one value.
+    static std::uint32_t ws_session_background_color = 0xFFFFFF;
+
     void window_server_client::execute_command(service::ipc_context &ctx, ws_cmd cmd) {
         cmd.header.op = protocol().session_opcode(cmd.header.op);
 
@@ -1352,6 +1357,17 @@ namespace eka2l1::epoc {
             // constructs (Series 80 EikSrvUi does, before it captures the application buttons). There is
             // no system cursor list here; accept the requests so the server gets past them.
             ctx.complete(epoc::error_none);
+            break;
+
+        case ws_cl_op_set_background_color:
+            ws_session_background_color = *reinterpret_cast<std::uint32_t *>(cmd.data_ptr);
+            ctx.complete(epoc::error_none);
+            break;
+
+        case ws_cl_op_get_background_color:
+            // The reply value is the TRgb itself (RWsSession::GetBackgroundColor returns TRgb(WriteReply())).
+            // Left unanswered, the client's command-buffer flush never returns (Series 80 Messaging).
+            ctx.complete(static_cast<int>(ws_session_background_color));
             break;
 
         default:
