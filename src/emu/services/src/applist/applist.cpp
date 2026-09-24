@@ -705,6 +705,103 @@ namespace eka2l1 {
         ctx.complete(count);
     }
 
+    void applist_server::embed_count(service::ipc_context &ctx) {
+        // The count is the completion code; control panel items are left out (APSSES.CPP EmbedCount).
+        std::int32_t count = 0;
+
+        for (const auto &reg : regs) {
+            if (reg.caps.flags & apa_capability::control_panel_item) {
+                continue;
+            }
+
+            if ((reg.caps.ability == apa_capability::embeddability::embeddable) || (reg.caps.ability == apa_capability::embeddability::embeddable_only)) {
+                count++;
+            }
+        }
+
+        ctx.complete(count);
+    }
+
+    void applist_server::launch_app_s60v2(service::ipc_context &ctx, const bool return_thread_id) {
+        std::optional<std::u16string> cmd_line = ctx.get_argument_value<std::u16string>(0);
+        if (!cmd_line || cmd_line->empty()) {
+            LOG_ERROR(SERVICE_APPLIST, "StartApp: no command line");
+            ctx.complete(epoc::error_argument);
+            return;
+        }
+
+        // FullCommandLine(): "<app path> <command letter><document> <tail>", the path quoted when it has spaces.
+        std::u16string app_path;
+        const std::u16string &cmd = cmd_line.value();
+
+        if (cmd[0] == u'"') {
+            const std::size_t closing = cmd.find(u'"', 1);
+            app_path = cmd.substr(1, (closing == std::u16string::npos) ? std::u16string::npos : closing - 1);
+        } else {
+            app_path = cmd.substr(0, cmd.find(u' '));
+        }
+
+        codeseg_ptr seg = kern->get_lib_manager()->load(app_path);
+        if (!seg) {
+            LOG_ERROR(SERVICE_APPLIST, "StartApp: cannot load {}", common::ucs2_to_utf8(app_path));
+            ctx.complete(epoc::error_not_found);
+            return;
+        }
+
+        std::u16string app_launch = APA_APP_RUNNER;
+        if (std::get<0>(seg->get_uids()) == epoc::EXECUTABLE_UID) {
+            app_launch = app_path;
+        }
+
+        kernel::uid thread_id = 0;
+        if (!launch_app(app_launch, cmd, &thread_id, ctx.msg->own_thr->owning_process(), std::get<2>(seg->get_uids()))) {
+            LOG_ERROR(SERVICE_APPLIST, "StartApp: failed to create the app process (command line: {})", common::ucs2_to_utf8(cmd));
+            ctx.complete(epoc::error_no_memory);
+            return;
+        }
+
+        LOG_TRACE(SERVICE_APPLIST, "StartApp: {}", common::ucs2_to_utf8(cmd));
+
+        if (return_thread_id) {
+            ctx.write_data_to_descriptor_argument<kernel::uid_eka1>(1, static_cast<kernel::uid_eka1>(thread_id));
+        }
+
+        ctx.complete(epoc::error_none);
+    }
+
+    void applist_server::start_document_by_uid_s60v2(service::ipc_context &ctx, const bool create) {
+        std::optional<std::u16string> doc_name = ctx.get_argument_value<std::u16string>(0);
+        std::optional<epoc::uid> app_uid = ctx.get_argument_value<epoc::uid>(1);
+
+        if (!doc_name || !app_uid) {
+            ctx.complete(epoc::error_argument);
+            return;
+        }
+
+        apa_app_registry *reg = get_registration(app_uid.value());
+        if (!reg) {
+            LOG_ERROR(SERVICE_APPLIST, "{}Document: no application 0x{:X}", create ? "Create" : "Start", app_uid.value());
+            ctx.complete(epoc::error_not_found);
+            return;
+        }
+
+        epoc::apa::command_line parameter;
+        parameter.launch_cmd_ = create ? epoc::apa::command_create : epoc::apa::command_open;
+        parameter.document_name_ = doc_name.value();
+
+        kernel::uid thread_id = 0;
+        if (!launch_app(*reg, parameter, &thread_id)) {
+            ctx.complete(epoc::error_general);
+            return;
+        }
+
+        LOG_TRACE(SERVICE_APPLIST, "{}Document: app 0x{:X}, document {}", create ? "Create" : "Start", app_uid.value(),
+            common::ucs2_to_utf8(doc_name.value()));
+
+        ctx.write_data_to_descriptor_argument<kernel::uid_eka1>(2, static_cast<kernel::uid_eka1>(thread_id));
+        ctx.complete(epoc::error_none);
+    }
+
     void applist_server::get_app_info(service::ipc_context &ctx) {
         const epoc::uid app_uid = *ctx.get_argument_value<epoc::uid>(0);
         apa_app_registry *reg = get_registration(app_uid);
@@ -722,7 +819,8 @@ namespace eka2l1 {
                 UNIQUE_MAPPED_EXTENSION_STRING;
         }
 
-        ctx.write_data_to_descriptor_argument<apa_app_info>(1, info_copy);
+        // TApaAppInfoBC (7.0) clients get the prefix that fits, as apparc does.
+        ctx.write_data_to_descriptor_argument<apa_app_info>(1, info_copy, nullptr, true);
         ctx.complete(epoc::error_none);
     }
 
@@ -1021,7 +1119,7 @@ namespace eka2l1 {
         ctx.complete(ctx.write_data_to_descriptor_argument(1, uid) ? epoc::error_none : epoc::error_argument);
     }
 
-    void applist_server::get_app_for_document_impl(service::ipc_context &ctx, const std::u16string &path) {
+    void applist_server::get_app_for_document_impl(service::ipc_context &ctx, const std::u16string &path, const int result_arg) {
         applist_app_for_document app;
         app.uid = 0;
         app.data_type.uid = 0;
@@ -1045,8 +1143,18 @@ namespace eka2l1 {
             LOG_TRACE(SERVICE_APPLIST, "AppList::AppForDocument datatype left empty!");
         }
 
-        ctx.write_data_to_descriptor_argument<applist_app_for_document>(0, app);
+        ctx.write_data_to_descriptor_argument<applist_app_for_document>(result_arg, app);
         ctx.complete(epoc::error_none);
+    }
+
+    void applist_server::get_app_for_document_s60v2(service::ipc_context &ctx) {
+        std::optional<std::u16string> path = ctx.get_argument_value<std::u16string>(0);
+        if (!path.has_value()) {
+            ctx.complete(epoc::error_argument);
+            return;
+        }
+
+        get_app_for_document_impl(ctx, path.value(), 1);
     }
 
     void applist_server::get_app_for_document_by_file_handle(service::ipc_context &ctx) {
@@ -1265,6 +1373,11 @@ namespace eka2l1 {
 
     applist_session::applist_session(service::typical_server *svr, kernel::uid client_ss_uid, epoc::version client_ver)
         : typical_session(svr, client_ss_uid, client_ver)
+        , current_index_(0)
+        , flags_mask_(0)
+        , flags_match_value_(0)
+        , requested_screen_mode_(0)
+        , embeddability_mask_(0)
         , filter_method_(APP_FILTER_NONE) {
     }
 
@@ -1280,7 +1393,7 @@ namespace eka2l1 {
 
         filter_method_ = APP_FILTER_BY_FLAGS;
         flags_mask_ = flags_mask.value();
-        flags_value = flags_value.value();
+        flags_match_value_ = flags_value.value();
         requested_screen_mode_ = screen_mode.value();
         current_index_ = 0;
 
@@ -1298,20 +1411,166 @@ namespace eka2l1 {
             if (!registries[current_index_].supports_screen_mode(requested_screen_mode_)) {
                 continue;
             }
-            
-            if (filter_method_ == APP_FILTER_BY_FLAGS) {
-                if ((registries[current_index_].caps.flags & flags_mask_) == flags_match_value_) {
-                    ctx.write_data_to_descriptor_argument<apa_app_info>(1, registries[current_index_].mandatory_info);
-                    ctx.complete(epoc::error_none);
 
-                    current_index_++;
-
-                    return;
-                }
+            if (!matches_current_filter(registries[current_index_])) {
+                continue;
             }
+
+            // A 7.0 client may pass TApaAppInfoBC (no iShortCaption); apparc writes the prefix that fits.
+            ctx.write_data_to_descriptor_argument<apa_app_info>(1, registries[current_index_].mandatory_info, nullptr, true);
+            ctx.complete(epoc::error_none);
+
+            current_index_++;
+            return;
         }
 
+        // The client maps KErrNotFound to RApaLsSession::ENoMoreAppsInList.
         ctx.complete(epoc::error_not_found);
+    }
+
+    bool applist_session::matches_current_filter(apa_app_registry &reg) {
+        switch (filter_method_) {
+        case APP_FILTER_ALL:
+            return true;
+
+        case APP_FILTER_BY_FLAGS:
+            return (reg.caps.flags & flags_mask_) == flags_match_value_;
+
+        case APP_FILTER_BY_EMBED: {
+            if (reg.caps.flags & apa_capability::control_panel_item) {
+                return false;
+            }
+
+            const std::uint32_t ability = static_cast<std::uint32_t>(reg.caps.ability);
+            return (ability < 32) && (embeddability_mask_ & (1u << ability));
+        }
+
+        default:
+            break;
+        }
+
+        return false;
+    }
+
+    void applist_session::init_app_list_s60v2(service::ipc_context &ctx, const app_filter_method method, const std::uint32_t embed_mask) {
+        // TIpcArgs(aScreenMode[, &TPckgC<TApaEmbeddabilityFilter>]); the list is rebuilt from the start.
+        requested_screen_mode_ = ctx.get_argument_value<std::uint32_t>(0).value_or(0);
+        filter_method_ = method;
+        embeddability_mask_ = embed_mask;
+        current_index_ = 0;
+
+        ctx.complete(epoc::error_none);
+    }
+
+    void applist_session::fetch_s60v2(service::ipc_context *ctx) {
+        applist_server *serv = server<applist_server>();
+
+        switch (ctx->msg->function) {
+        case applist_request_s60v2_init_full_list:
+            init_app_list_s60v2(*ctx, APP_FILTER_ALL, 0);
+            break;
+
+        case applist_request_s60v2_init_embed_list:
+            // TApaAppCapability::EEmbeddable and EEmbeddableOnly
+            init_app_list_s60v2(*ctx, APP_FILTER_BY_EMBED, (1u << static_cast<std::uint32_t>(apa_capability::embeddability::embeddable)) | (1u << static_cast<std::uint32_t>(apa_capability::embeddability::embeddable_only)));
+            break;
+
+        case applist_request_s60v2_init_filtered_embed_list: {
+            // TApaEmbeddabilityFilter is a single TUint of (1 << TEmbeddability) bits.
+            std::optional<std::uint32_t> filter = ctx->get_argument_data_from_descriptor<std::uint32_t>(1);
+            init_app_list_s60v2(*ctx, APP_FILTER_BY_EMBED, filter.value_or(0));
+            break;
+        }
+
+        case applist_request_s60v2_get_next_app:
+            get_next_app(*ctx);
+            break;
+
+        case applist_request_s60v2_embed_count:
+            serv->embed_count(*ctx);
+            break;
+
+        case applist_request_s60v2_app_count:
+            serv->app_count(*ctx);
+            break;
+
+        case applist_request_s60v2_app_info:
+            serv->get_app_info(*ctx);
+            break;
+
+        case applist_request_s60v2_get_app_capability:
+            serv->get_capability(*ctx);
+            break;
+
+        case applist_request_s60v2_start_app_without_returning_thread_id:
+            serv->launch_app_s60v2(*ctx, false);
+            break;
+
+        case applist_request_s60v2_start_app_returning_thread_id:
+            serv->launch_app_s60v2(*ctx, true);
+            break;
+
+        case applist_request_s60v2_start_document_by_uid:
+            serv->start_document_by_uid_s60v2(*ctx, false);
+            break;
+
+        case applist_request_s60v2_create_document_by_uid:
+            serv->start_document_by_uid_s60v2(*ctx, true);
+            break;
+
+        case applist_request_s60v2_app_for_document:
+            serv->get_app_for_document_s60v2(*ctx);
+            break;
+
+        case applist_request_s60v2_is_program:
+            serv->is_program(*ctx);
+            break;
+
+        case applist_request_s60v2_get_data_types_phase1:
+            serv->get_supported_data_types_phase1(*ctx);
+            break;
+
+        case applist_request_s60v2_get_data_types_phase2:
+            serv->get_supported_data_types_phase2(*ctx);
+            break;
+
+        case applist_request_s60v2_set_notify:
+            // CApaAppListNotifier re-arms this after every completion: complete it only on a change.
+            if (list_change_notify_) {
+                list_change_notify_->complete(epoc::error_cancel);
+            }
+
+            list_change_notify_ = ctx->move_to_new();
+            break;
+
+        case applist_request_s60v2_cancel_notify:
+            if (list_change_notify_) {
+                list_change_notify_->complete(epoc::error_cancel);
+                list_change_notify_.reset();
+            }
+
+            ctx->complete(epoc::error_none);
+            break;
+
+        case applist_request_s60v2_close_server:
+            ctx->complete(epoc::error_none);
+            break;
+
+        case applist_request_s60v2_app_icon_by_uid_and_size:
+            serv->get_app_icon(*ctx);
+            break;
+
+        case applist_request_s60v2_get_app_icon_sizes:
+            serv->get_app_icon_sizes(*ctx);
+            break;
+
+        default:
+            // A synchronous request that is never completed parks the client thread for good (the
+            // Series 80 Desk did exactly that on GetAllApps). Answer the rest with KErrNotSupported.
+            LOG_ERROR(SERVICE_APPLIST, "Unimplemented applist opcode {} (Symbian 7.0s table)", ctx->msg->function);
+            ctx->complete(epoc::error_not_supported);
+            break;
+        }
     }
 
     void applist_session::fetch(service::ipc_context *ctx) {
@@ -1343,19 +1602,7 @@ namespace eka2l1 {
                 break;
             }
         } else if (llevel == APA_LEGACY_LEVEL_S60V2) {
-            switch (ctx->msg->function) {
-            case applist_request_s60v2_app_info:
-                server<applist_server>()->get_app_info(*ctx);
-                break;
-
-            case applist_request_s60v2_app_icon_by_uid_and_size:
-                server<applist_server>()->get_app_icon(*ctx);
-                break;
-
-            default:
-                LOG_ERROR(SERVICE_APPLIST, "Unimplemented applist opcode {}", ctx->msg->function);
-                break;
-            }
+            fetch_s60v2(ctx);
         } else if (llevel == APA_LEGACY_LEVEL_TRANSITION) {
             switch (ctx->msg->function) {
             case applist_request_trans_app_info:
