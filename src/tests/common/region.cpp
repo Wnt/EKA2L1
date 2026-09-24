@@ -115,3 +115,34 @@ TEST_CASE("Region subtraction visits every existing rectangle", "[region]") {
         REQUIRE(coverage(area, x, 1) == 0);
     }
 }
+
+TEST_CASE("Rectangles that cover no pixel never enter a region", "[region]") {
+    // TRect::IsEmpty(): no width or no height. A 0x34 spacer window used to leave its whole
+    // bounding rectangle in the invalid region for good, because nothing could subtract it.
+    common::region area;
+    REQUIRE_FALSE(area.add_rect(rect({0, 0}, {0, 34})));
+    REQUIRE_FALSE(area.add_rect(rect({0, 0}, {32, 0})));
+    REQUIRE_FALSE(area.add_rect(rect({4, 4}, {-3, 5})));
+    REQUIRE(area.empty());
+
+    area.add_rect(rect({0, 0}, {10, 10}));
+    area.eliminate(rect({5, 0}, {0, 10}));
+    REQUIRE(area.rects_.size() == 1);
+    REQUIRE(area.rects_[0] == rect({0, 0}, {10, 10}));
+
+    // One that got into rects_ directly is dropped by the next subtraction.
+    area.rects_.push_back(rect({20, 20}, {0, 5}));
+    area.eliminate(rect({0, 0}, {1, 1}));
+    for (const auto &part : area.rects_) {
+        REQUIRE(part.size.x > 0);
+        REQUIRE(part.size.y > 0);
+    }
+
+    // And no intersection produces one.
+    common::region spacer;
+    spacer.rects_.push_back(rect({0, 0}, {0, 34}));
+    common::region window;
+    window.add_rect(rect({-5, -5}, {50, 50}));
+    REQUIRE(spacer.intersect(window).empty());
+    REQUIRE(window.intersect(spacer).empty());
+}

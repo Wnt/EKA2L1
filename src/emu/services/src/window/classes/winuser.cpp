@@ -672,7 +672,11 @@ namespace eka2l1::epoc {
             prototype_irect = whole_win;
         }
 
-        if (!prototype_irect.empty() && whole_win.contains(prototype_irect)) {
+        // WSERV keeps any non-empty rectangle and only ever redraws the part inside the window
+        // (CWsRedrawMsgWindow::GetRedrawRect), so a rectangle reaching past an edge is cut, not dropped.
+        prototype_irect = prototype_irect.intersect(whole_win);
+
+        if ((prototype_irect.size.x > 0) && (prototype_irect.size.y > 0)) {
             invalidate(prototype_irect);
 
             if (scr->scr_config.flicker_free) {
@@ -1242,15 +1246,20 @@ namespace eka2l1::epoc {
     }
 
     void redraw_msg_canvas::invalidate(const eka2l1::rect &irect) {
-        if (irect.empty()) {
-            return;
-        }
-
         if (win_type != window_type::redraw) {
             return;
         }
 
-        eka2l1::rect to_queue = irect;
+        // A zero-width or zero-height rectangle has nothing to redraw (TRect::IsEmpty). S80 Sheet and
+        // Documents activate windows sized 0x34 and 32x0; queueing their bounding rectangle made a
+        // redraw that BeginRedraw could never validate, and the client spun on it at full speed:
+        // GetRedraw, BeginRedraw, EndRedraw, forever. Callers clip to the window themselves: on a
+        // resize this runs before the new size is set.
+        const eka2l1::rect to_queue = irect;
+
+        if ((to_queue.size.x <= 0) || (to_queue.size.y <= 0)) {
+            return;
+        }
 
         // Queue invalidate even if there's no change to the invalidated region.
         redraw_region.add_rect(to_queue);
