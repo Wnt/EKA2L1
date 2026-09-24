@@ -456,6 +456,7 @@ namespace eka2l1::epoc::socket {
     }
 
     void socket_connection_proxy::dispatch(service::ipc_context *ctx) {
+        LOG_TRACE(SERVICE_ESOCK, "RConnection request 0x{:X} ({})", ctx->msg->function, ctx->msg->request_sts ? "async" : "sync");
         if (parent_->is_oldarch()) {
             switch (ctx->msg->function) {
             

@@ -598,6 +598,7 @@ namespace eka2l1::epoc::socket {
     }
 
     void socket_socket::dispatch(service::ipc_context *ctx) {
+        LOG_TRACE(SERVICE_ESOCK, "RSocket request 0x{:X} ({})", ctx->msg->function, ctx->msg->request_sts ? "async" : "sync");
         if (parent_->is_oldarch()) {
             switch (ctx->msg->function) {
             case socket_old_so_set_opt:

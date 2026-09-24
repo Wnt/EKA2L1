@@ -122,6 +122,9 @@ namespace eka2l1 {
     }
 
     void socket_client_session::fetch(service::ipc_context *ctx) {
+        LOG_TRACE(SERVICE_ESOCK, "ESock request 0x{:X} ({}) from {}", ctx->msg->function,
+            ctx->msg->request_sts ? "async" : "sync", ctx->msg->own_thr ? ctx->msg->own_thr->name() : "?");
+
         if (is_oldarch()) {
             switch (ctx->msg->function) {
             case socket_old_pr_find:
