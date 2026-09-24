@@ -105,6 +105,18 @@ namespace eka2l1::epoc {
             return;
         }
 
+        if (lastest_segment->region_.empty()) {
+            // BeginRedraw on a rectangle that covers no pixel. WSERV opens no segment for it at all
+            // (CWsRedrawMsgWindow::DoBeginRedrawL) and drops what is drawn; keeping it would only
+            // grow the store by one dead segment per redraw.
+            if (current_segment_ == lastest_segment) {
+                current_segment_ = nullptr;
+            }
+
+            segments_.pop_back();
+            return;
+        }
+
         for (std::size_t i = 0; i < lastest_segment->region_.rects_.size(); i++) {
             for (std::size_t j = 0; j < segments_.size(); ) {
                 if (segments_[j]->type_ != gdi_store_command_segment_pending_redraw) {
@@ -470,6 +482,12 @@ namespace eka2l1::epoc {
 
         builder_.set_texture_filter(source_bitmap_drv, false, texture_filter_);
         builder_.set_texture_filter(source_bitmap_drv, true, texture_filter_);
+
+        if (cmd.gdi_flags_ & GDI_STORE_COMMAND_TILE) {
+            // Patterned brush: the source rectangle runs past the bitmap, the sampler wraps it.
+            builder_.set_texture_addressing_mode(source_bitmap_drv, drivers::addressing_direction::s, drivers::addressing_option::repeat);
+            builder_.set_texture_addressing_mode(source_bitmap_drv, drivers::addressing_direction::t, drivers::addressing_option::repeat);
+        }
 
         if (mask_bitmap_drv) {
             builder_.set_texture_filter(mask_bitmap_drv, false, texture_filter_);

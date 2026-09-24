@@ -61,6 +61,9 @@ namespace eka2l1 {
 
     public:
         explicit eikappui_session(service::typical_server *svr, kernel::uid client_ss_uid, epoc::version client_version);
+
+        // Series 80 v2 speaks its own EikSrv opcode table.
+        void fetch_s80(service::ipc_context *ctx);
         ~eikappui_session() override;
 
         void fetch(service::ipc_context *ctx) override;
