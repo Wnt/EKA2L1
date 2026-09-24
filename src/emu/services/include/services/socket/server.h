@@ -53,6 +53,7 @@ namespace eka2l1 {
             void bind_state(const std::shared_ptr<connection_state> &state, bool monitor = false);
             void attach(service::ipc_context *ctx);
             void start(service::ipc_context *ctx, bool with_preferences);
+            void start_with(service::ipc_context *ctx, const connection_info &info);
             void enumerate(service::ipc_context *ctx);
             void get_info(service::ipc_context *ctx);
             void get_int_setting(service::ipc_context *ctx);
@@ -168,6 +169,10 @@ namespace eka2l1 {
         socket_so_recv_one_or_more = 0x0C,
         socket_so_read = 0x0D,
         socket_so_write = 0xE,
+        socket_so_send_to = 0x0F,
+        socket_so_send_to_no_len = 0x10,
+        socket_so_recv_from = 0x11,
+        socket_so_recv_from_no_len = 0x12,
         socket_so_connect = 0x13,
         socket_so_bind = 0x14,
         socket_so_accept = 0x15,
@@ -179,6 +184,7 @@ namespace eka2l1 {
         socket_so_remote_name = 0x1C,
         socket_so_close = 0x1D,
         socket_so_shutdown = 0x1E,
+        socket_so_cancel_ioctl = 0x1F,
         socket_so_cancel_recv = 0x20,
         socket_so_cancel_send = 0x21,
         socket_so_cancel_connect = 0x22,

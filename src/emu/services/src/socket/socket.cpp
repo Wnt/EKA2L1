@@ -598,6 +598,7 @@ namespace eka2l1::epoc::socket {
     }
 
     void socket_socket::dispatch(service::ipc_context *ctx) {
+        LOG_TRACE(SERVICE_ESOCK, "RSocket request 0x{:X} ({})", ctx->msg->function, ctx->msg->request_sts ? "async" : "sync");
         if (parent_->is_oldarch()) {
             switch (ctx->msg->function) {
             case socket_old_so_set_opt:
@@ -863,8 +864,33 @@ namespace eka2l1::epoc::socket {
                     recv(ctx, true, true, false);
                     return;
 
+                // The pre-reform client sends SendTo/RecvFrom with the address descriptor in slot 1 and
+                // the data in slot 2; the length variants carry the flags inside the TSockXfrLength
+                // package in slot 0, exactly as Send/Recv do (7.0s ROM esock.dll, RSocket::SendTo
+                // pushes 0x0F/0x10 and RSocket::RecvFrom 0x11/0x12).
+                case socket_so_send_to:
+                    send(ctx, true, true);
+                    return;
+
+                case socket_so_send_to_no_len:
+                    send(ctx, false, true);
+                    return;
+
+                case socket_so_recv_from:
+                    recv(ctx, true, false, true);
+                    return;
+
+                case socket_so_recv_from_no_len:
+                    recv(ctx, false, false, true);
+                    return;
+
                 case socket_so_ioctl:
                     ioctl(ctx);
+                    return;
+
+                case socket_so_cancel_ioctl:
+                    // Synchronous on the client; an unanswered cancel parks the calling thread.
+                    ctx->complete(epoc::error_none);
                     return;
 
                 case socket_so_cancel_send:

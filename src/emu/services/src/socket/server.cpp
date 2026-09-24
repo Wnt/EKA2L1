@@ -110,10 +110,21 @@ namespace eka2l1 {
     }
 
     bool socket_client_session::is_oldarch() {
-        return server<socket_server>()->get_kernel_object_owner()->get_epoc_version() < epocver::epoc81a;
+        // The 6.1 (socket_opcode_old) numbering ends with Symbian OS 7.0. The 7.0s client
+        // (Nokia 9300 RAE-6 ROM esock.dll, build 187: RSocket::Connect pushes 0x13, Send 0x09/0x08,
+        // Recv 0x0B/0x0A, RecvOneOrMore 0x0C, RHostResolver::GetByName 0x29, RConnection::Open 0x3F,
+        // Start 0x43/0x44, ProgressNotification 0x47, GetIntSetting 0x4C) already uses the pre-reform
+        // socket_opcode table that Symbian kept unchanged up to 9.4, and packs its arguments the same
+        // way (TIpcArgs block: Connect [&addr], Send-no-length [flags, 0, &desc], Send/Recv with
+        // length [&xfrlen carrying the flags, 0, &desc], GetByName [&name, &result]). 8.0a/8.1a sit
+        // between the two proven ends of that unchanged table.
+        return server<socket_server>()->get_kernel_object_owner()->get_epoc_version() < epocver::epoc7;
     }
 
     void socket_client_session::fetch(service::ipc_context *ctx) {
+        LOG_TRACE(SERVICE_ESOCK, "ESock request 0x{:X} ({}) from {}", ctx->msg->function,
+            ctx->msg->request_sts ? "async" : "sync", ctx->msg->own_thr ? ctx->msg->own_thr->name() : "?");
+
         if (is_oldarch()) {
             switch (ctx->msg->function) {
             case socket_old_pr_find:

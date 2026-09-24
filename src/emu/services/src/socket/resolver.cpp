@@ -124,6 +124,7 @@ namespace eka2l1::epoc::socket {
     }
 
     void socket_host_resolver::dispatch(service::ipc_context *ctx) {
+        LOG_TRACE(SERVICE_ESOCK, "RHostResolver request 0x{:X} ({})", ctx->msg->function, ctx->msg->request_sts ? "async" : "sync");
         if (parent_->is_oldarch()) {
             switch (ctx->msg->function) {
             case socket_old_hr_get_by_name:

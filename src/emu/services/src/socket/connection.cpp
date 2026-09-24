@@ -23,6 +23,7 @@
 #include <services/socket/socket.h>
 #include <services/centralrepo/centralrepo.h>
 
+#include <common/cvt.h>
 #include <common/log.h>
 #include <utils/err.h>
 #include <system/epoc.h>
@@ -277,47 +278,22 @@ namespace eka2l1::epoc::socket {
         }
     }
 
-    void socket_connection_proxy::start(service::ipc_context *ctx, bool with_preferences) {
-        std::uint32_t iap = 0;
-        if (with_preferences) {
-            const auto preferences = ctx->get_argument_value<std::string>(0);
-            if (!preferences || preferences->size() < 24) {
-                ctx->complete(epoc::error_argument);
-                return;
-            }
-            std::uint16_t extension = 0;
-            std::memcpy(&extension, preferences->data(), sizeof(extension));
-            if (extension != 1) {
-                ctx->complete(epoc::error_not_supported);
-                return;
-            }
-            // TConnPref's four-byte header precedes SCommDbConnPref (commdbconnpref.h).
-            std::memcpy(&iap, preferences->data() + 4, sizeof(iap));
-        }
+    // Symbian OS 7.0s (EKA1) keeps CommDB in a DBMS file (C:\System\Data\Cdbv3.dat) that only guest code reads,
+    // and it has no CommsDat repository (0xCCCCCC00). The HLE sockets already use the host network, so on EKA1 every
+    // RConnection is an always-connected host access point: it takes the IAP the client asked for (or 1), needs no
+    // agent, no NIF and no dialog, and reports KConnectionOpen then KLinkLayerOpen at once.
+    static constexpr std::uint32_t EKA1_HOST_IAP = 1;
+    static constexpr std::uint32_t EKA1_HOST_NETWORK = 1;
+    static constexpr std::uint32_t EKA1_HOST_SERVICE = 1;
+    static const std::u16string EKA1_HOST_IAP_NAME = u"Host network";
+    static const std::u16string EKA1_HOST_SERVICE_TYPE = u"LANService";
+    static const std::u16string EKA1_HOST_BEARER_TYPE = u"LANBearer";
 
-        auto *cenrep = reinterpret_cast<central_repo_server *>(ctx->sys->get_kernel_system()
-            ->get_by_name<service::server>(CENTRAL_REPO_SERVER_NAME));
-        auto *repo = cenrep ? cenrep->load_repo_with_lookup(ctx->sys->get_io_system(),
-            ctx->sys->get_device_manager(), 0xCCCCCC00) : nullptr;
-        if (!repo) {
-            ctx->complete(epoc::error_not_found);
-            return;
-        }
-        repo->access_count--;
-        if (!iap) {
-            for (std::uint32_t id = 1; id < 255; id++) {
-                if (repo->find_entry(0x02820000 | (id << 8))) {
-                    iap = id;
-                    break;
-                }
-            }
-        }
-        auto *network = iap && iap < 255 ? repo->find_entry(0x02870000 | (iap << 8)) : nullptr;
-        if (!network || network->data.etype != central_repo_entry_type::integer) {
-            ctx->complete(epoc::error_not_found);
-            return;
-        }
-        const connection_info info{1, iap, static_cast<std::uint32_t>(network->data.intd)};
+    static bool is_eka1_commdb(service::ipc_context *ctx) {
+        return ctx->sys->get_kernel_system()->is_eka1();
+    }
+
+    void socket_connection_proxy::start_with(service::ipc_context *ctx, const connection_info &info) {
         auto &registry = parent_->server<socket_server>()->connections();
         auto state = registry.find(info);
         if (!state) {
@@ -330,6 +306,62 @@ namespace eka2l1::epoc::socket {
             state->advance(conn_progress_link_layer_open);
         }
         ctx->complete(epoc::error_none);
+    }
+
+    void socket_connection_proxy::start(service::ipc_context *ctx, bool with_preferences) {
+        std::uint32_t iap = 0;
+        std::uint32_t network = 0;
+        std::uint32_t dialog = 0;
+        if (with_preferences) {
+            const auto preferences = ctx->get_argument_value<std::string>(0);
+            if (!preferences || preferences->size() < 24) {
+                ctx->complete(epoc::error_argument);
+                return;
+            }
+            std::uint16_t extension = 0;
+            std::memcpy(&extension, preferences->data(), sizeof(extension));
+            if (extension != 1) {
+                ctx->complete(epoc::error_not_supported);
+                return;
+            }
+            // TConnPref's four-byte header (SConnPref::iExtensionId) precedes SCommDbConnPref
+            // {iIapId, iNetId, iDialogPref, iDirection, iBearerSet} (commdbconnpref.h, 7.0s onwards).
+            std::memcpy(&iap, preferences->data() + 4, sizeof(iap));
+            std::memcpy(&network, preferences->data() + 8, sizeof(network));
+            std::memcpy(&dialog, preferences->data() + 12, sizeof(dialog));
+        }
+
+        auto *cenrep = reinterpret_cast<central_repo_server *>(ctx->sys->get_kernel_system()
+            ->get_by_name<service::server>(CENTRAL_REPO_SERVER_NAME));
+        auto *repo = cenrep ? cenrep->load_repo_with_lookup(ctx->sys->get_io_system(),
+            ctx->sys->get_device_manager(), 0xCCCCCC00) : nullptr;
+        if (!repo) {
+            if (!is_eka1_commdb(ctx)) {
+                ctx->complete(epoc::error_not_found);
+                return;
+            }
+            const connection_info info{1, iap ? iap : EKA1_HOST_IAP, network ? network : EKA1_HOST_NETWORK};
+            LOG_INFO(SERVICE_ESOCK, "RConnection::Start{} on EKA1: host access point up (asked IAP {}, network {}, "
+                "dialog pref {}; using IAP {}, network {})", with_preferences ? "(TConnPref)" : "()", iap, network,
+                dialog, info.iap_id, info.network_id);
+            start_with(ctx, info);
+            return;
+        }
+        repo->access_count--;
+        if (!iap) {
+            for (std::uint32_t id = 1; id < 255; id++) {
+                if (repo->find_entry(0x02820000 | (id << 8))) {
+                    iap = id;
+                    break;
+                }
+            }
+        }
+        auto *network_entry = iap && iap < 255 ? repo->find_entry(0x02870000 | (iap << 8)) : nullptr;
+        if (!network_entry || network_entry->data.etype != central_repo_entry_type::integer) {
+            ctx->complete(epoc::error_not_found);
+            return;
+        }
+        start_with(ctx, connection_info{1, iap, static_cast<std::uint32_t>(network_entry->data.intd)});
     }
 
     void socket_connection_proxy::enumerate(service::ipc_context *ctx) {
@@ -356,7 +388,11 @@ namespace eka2l1::epoc::socket {
         } else if (name == u"IAP\\Id" || name == u"IAP\\IAPNetwork") {
             const auto value = name == u"IAP\\Id" ? state->info.iap_id : state->info.network_id;
             ctx->complete(ctx->write_data_to_descriptor_argument(1, value) ? epoc::error_none : epoc::error_argument);
+        } else if (is_eka1_commdb(ctx) && (name == u"IAP\\IAPService" || name == u"IAP\\IAPBearer")) {
+            // The host access point's service and bearer records (LANService 1, LANBearer 1).
+            ctx->complete(ctx->write_data_to_descriptor_argument(1, EKA1_HOST_SERVICE) ? epoc::error_none : epoc::error_argument);
         } else {
+            LOG_TRACE(SERVICE_ESOCK, "RConnection::GetIntSetting({}) not served", name ? common::ucs2_to_utf8(*name) : "?");
             ctx->complete(epoc::error_not_found);
         }
     }
@@ -366,6 +402,27 @@ namespace eka2l1::epoc::socket {
         const auto state = observed_state_.lock();
         if (!state || !state->active) {
             ctx->complete(epoc::error_not_ready);
+            return;
+        }
+        if (is_eka1_commdb(ctx)) {
+            const std::u16string *value = nullptr;
+            if (name == u"IAP\\Name") {
+                value = &EKA1_HOST_IAP_NAME;
+            } else if (name == u"IAP\\IAPServiceType") {
+                value = &EKA1_HOST_SERVICE_TYPE;
+            } else if (name == u"IAP\\IAPBearerType") {
+                value = &EKA1_HOST_BEARER_TYPE;
+            }
+            if (!value) {
+                LOG_TRACE(SERVICE_ESOCK, "RConnection::GetDesSetting({}) not served", name ? common::ucs2_to_utf8(*name) : "?");
+                ctx->complete(epoc::error_not_found);
+                return;
+            }
+            if (value->size() > ctx->get_argument_max_data_size(1)) {
+                ctx->complete(epoc::error_overflow);
+                return;
+            }
+            ctx->complete(ctx->write_arg(1, *value) ? epoc::error_none : epoc::error_argument);
             return;
         }
         std::uint32_t field = 0;
@@ -399,6 +456,7 @@ namespace eka2l1::epoc::socket {
     }
 
     void socket_connection_proxy::dispatch(service::ipc_context *ctx) {
+        LOG_TRACE(SERVICE_ESOCK, "RConnection request 0x{:X} ({})", ctx->msg->function, ctx->msg->request_sts ? "async" : "sync");
         if (parent_->is_oldarch()) {
             switch (ctx->msg->function) {
             
