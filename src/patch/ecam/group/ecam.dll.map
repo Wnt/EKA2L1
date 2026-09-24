@@ -1,3 +1,8 @@
+[requirements]
+; Series 80 v2's ecam.dll (Nokia 9300 / 9300i, UID3 0x101FB4C3) does not export the API these routes
+; describe; replacing it breaks the Control panel. Leave that DLL alone.
+not_uid3=0x101FB4C3
+
 [shared]
 1 1    	; _ZN7CCamera13NewDuplicateLER15MCameraObserveri @ 1 NONAME
 2 2    	; _ZN7CCamera16CamerasAvailableEv @ 2 NONAME

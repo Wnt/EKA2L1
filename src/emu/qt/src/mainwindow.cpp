@@ -49,6 +49,7 @@
 #include <common/path.h>
 #include <common/platform.h>
 #include <common/rgb.h>
+#include <common/stall.h>
 
 #include <config/app_settings.h>
 
@@ -504,13 +505,30 @@ void main_window::setup_package_installer_ui_hooks() {
     eka2l1::system *system = emulator_state_.symsys.get();
     eka2l1::manager::packages *pkgmngr = system->get_packages();
 
+    // Both of these are blocking-queued connections: they run on the installer's thread
+    // and do not return until the UI thread has shown the dialog and the user answered.
+    // If the UI thread is itself blocked, this is where the installer stops for good, so
+    // bracket them -- an "asking" line with no answer after it names the deadlock, and
+    // the breadcrumb says the same thing to anyone inspecting the thread.
     pkgmngr->show_text = [this](const char *text, const bool one_button) -> bool {
+        const eka2l1::common::wait_scope scope("the UI thread to answer a package install prompt");
+        LOG_TRACE(eka2l1::FRONTEND_UI, "Asking the UI thread to show a package install prompt");
+
         // We only have one receiver, so it's ok ;)
-        return emit package_install_text_ask(text, one_button);
+        const bool answer = emit package_install_text_ask(text, one_button);
+
+        LOG_TRACE(eka2l1::FRONTEND_UI, "The package install prompt was answered");
+        return answer;
     };
 
     pkgmngr->choose_lang = [this](const int *languages, const int language_count) -> int {
-        return emit package_install_language_choose(languages, language_count);
+        const eka2l1::common::wait_scope scope("the UI thread to answer a package language choice");
+        LOG_TRACE(eka2l1::FRONTEND_UI, "Asking the UI thread to choose a package language");
+
+        const int chosen = emit package_install_language_choose(languages, language_count);
+
+        LOG_TRACE(eka2l1::FRONTEND_UI, "The package language choice was answered");
+        return chosen;
     };
 }
 

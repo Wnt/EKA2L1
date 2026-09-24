@@ -33,6 +33,30 @@ namespace eka2l1 {
         }
     }
 
+    alarm_alert_server_eka1::alarm_alert_server_eka1(eka2l1::system *sys)
+        : service::typical_server(sys, "AlarmAlertServer") {
+    }
+
+    void alarm_alert_server_eka1::connect(service::ipc_context &context) {
+        create_session<alarm_alert_session_eka1>(&context);
+        context.complete(epoc::error_none);
+    }
+
+    alarm_alert_session_eka1::alarm_alert_session_eka1(service::typical_server *serv, const kernel::uid ss_id,
+        epoc::version client_version)
+        : service::typical_session(serv, ss_id, client_version) {
+    }
+
+    void alarm_alert_session_eka1::fetch(service::ipc_context *ctx) {
+        if (ctx->msg->type == ipc_message_type_sync) {
+            ctx->complete(epoc::error_none);
+            return;
+        }
+
+        // Asynchronous: the alert UI would complete it when the user reacts. Leave it pending.
+        LOG_TRACE(SERVICE_ALARM, "Alarm alert request {} left pending (no alert UI)", ctx->msg->function);
+    }
+
     alarm_server::alarm_server(eka2l1::system *sys)
         : service::typical_server(sys, "!AlarmServer") {
     }

@@ -93,7 +93,9 @@ namespace eka2l1::desktop {
         config::state conf;
         window_server *winserv;
 
-        std::mutex lockdown;
+        // Timed rather than plain so a thread that cannot get it can say so instead of
+        // disappearing into an untimed lock; see lock_reporting_stall in thread.cpp.
+        std::timed_mutex lockdown;
         std::size_t sys_reset_cbh;
 
         main_window *ui_main;

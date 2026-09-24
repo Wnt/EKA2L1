@@ -432,6 +432,13 @@ namespace eka2l1 {
                 is_supported_by_module(ctx);
                 break;
 
+            // RTelServer::SetPriorityClient and SetExtendedErrorGranularity only record a preference.
+            // Left unanswered, the Series 80 Contacts app blocked on 14 before its first redraw.
+            case epoc::etel_old_set_priority_client:
+            case epoc::etel_old_set_extend_error_granularity:
+                ctx->complete(epoc::error_none);
+                break;
+
             default:
                 std::optional<std::uint32_t> subsess_id = ctx->get_argument_value<std::uint32_t>(3);
 
