@@ -1513,7 +1513,10 @@ namespace eka2l1 {
             native_executable_path = mandatory_info.app_path.to_std_string(nullptr);
         }
 
-        args.document_name_ = eka2l1::replace_extension(eka2l1::filename(app_path), u"");
+        // Keep a document the caller asked for (a file or, for the S80 browser, a URL).
+        if (args.document_name_.empty()) {
+            args.document_name_ = eka2l1::replace_extension(eka2l1::filename(app_path), u"");
+        }
         args.executable_path_ = app_path;
         args.default_screen_number_ = default_screen_number;
     }
