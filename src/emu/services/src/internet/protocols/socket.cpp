@@ -48,6 +48,17 @@ extern "C" {
 
 namespace eka2l1::epoc::internet {
     namespace {
+        // ESOCK-DONE for requests the libuv looper finishes later: pairs with the ESOCK-REQ trace in
+        // service::typical_server and ipc_context::complete, so a trace shows whether each async socket
+        // request was completed, with what, and which guest thread was signalled.
+        void inet_trace_complete(epoc::notify_info &info, const char *what, const int code) {
+            if (!info.empty()) {
+                LOG_INFO(SERVICE_ESOCK, "ESOCK-DONE {} sts=0x{:08X} result={} (deferred) thr={}", what, info.sts.ptr_address(),
+                    code, info.requester ? info.requester->name() : "?");
+            }
+            info.complete(code);
+        }
+
         bool same_host_address(const socket::saddress &left, const socket::saddress &right) {
             if (left.family_ != right.family_) {
                 return false;
@@ -391,7 +402,7 @@ namespace eka2l1::epoc::internet {
         kern->lock();
 
         if (error_code == 0) {
-            connect_done_info_.complete(epoc::error_none);
+            inet_trace_complete(connect_done_info_, "connect", epoc::error_none);
         } else {
             LOG_ERROR(SERVICE_INTERNET, "Connect through libuv failed with code {}", error_code);
 
@@ -430,7 +441,7 @@ namespace eka2l1::epoc::internet {
                 break;
             }
 
-            connect_done_info_.complete(guest_error_code);
+            inet_trace_complete(connect_done_info_, "connect", guest_error_code);
         }
 
         kern->unlock();
@@ -833,9 +844,9 @@ namespace eka2l1::epoc::internet {
 
         if (err != 0) {
             LOG_ERROR(SERVICE_INTERNET, "Send failed with UV error code {}, please handle it!", err);
-            send_done_info_.complete(epoc::error_general);
+            inet_trace_complete(send_done_info_, "send", epoc::error_general);
         } else {
-            send_done_info_.complete(epoc::error_none);
+            inet_trace_complete(send_done_info_, "send", epoc::error_none);
         }
 
         bytes_written_ = nullptr;
@@ -1035,7 +1046,7 @@ namespace eka2l1::epoc::internet {
         kern->lock();
         // Just complete now!
         if (!recv_done_info_.empty()) {
-            recv_done_info_.complete(error_code);
+            inet_trace_complete(recv_done_info_, "recv", error_code);
         }
 
         kern->unlock();
@@ -1111,7 +1122,7 @@ namespace eka2l1::epoc::internet {
 
         // Just complete now!
         if (!recv_done_info_.empty()) {
-            recv_done_info_.complete(error_code);
+            inet_trace_complete(recv_done_info_, "recv", error_code);
         }
 
         kern->unlock();
@@ -1200,7 +1211,7 @@ namespace eka2l1::epoc::internet {
                         receive_done_cb_ = nullptr;
                     }
 
-                    recv_done_info_.complete(epoc::error_none);
+                    inet_trace_complete(recv_done_info_, "recv", epoc::error_none);
                     return;
                 }
             }
@@ -1222,7 +1233,7 @@ namespace eka2l1::epoc::internet {
         kernel_system *kern = recv_done_info_.requester->get_kernel_object_owner();
 
         kern->lock();
-        recv_done_info_.complete(epoc::error_cancel);
+        inet_trace_complete(recv_done_info_, "recv", epoc::error_cancel);
         kern->unlock();
     }
 
@@ -1236,7 +1247,7 @@ namespace eka2l1::epoc::internet {
         kernel_system *kern = recv_done_info_.requester->get_kernel_object_owner();
 
         kern->lock();
-        recv_done_info_.complete(epoc::error_cancel);
+        inet_trace_complete(recv_done_info_, "recv", epoc::error_cancel);
         kern->unlock();
     }
 
@@ -1249,11 +1260,11 @@ namespace eka2l1::epoc::internet {
     }
 
     void inet_socket::cancel_send() {
-        send_done_info_.complete(epoc::error_cancel);
+        inet_trace_complete(send_done_info_, "send", epoc::error_cancel);
     }
 
     void inet_socket::cancel_connect() {
-        connect_done_info_.complete(epoc::error_cancel);
+        inet_trace_complete(connect_done_info_, "connect", epoc::error_cancel);
     }
 
     void inet_socket::complete_shutdown_info(const int err) {
@@ -1266,9 +1277,9 @@ namespace eka2l1::epoc::internet {
 
         if (err < 0) {
             LOG_ERROR(SERVICE_INTERNET, "Shutdown encountered libuv error code {}", err);
-            shutdown_info_.complete(epoc::error_general);
+            inet_trace_complete(shutdown_info_, "shutdown", epoc::error_general);
         } else {
-            shutdown_info_.complete(epoc::error_none);
+            inet_trace_complete(shutdown_info_, "shutdown", epoc::error_none);
         }
 
         kern->unlock();

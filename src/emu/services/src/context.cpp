@@ -139,7 +139,24 @@ namespace eka2l1 {
             return std::nullopt;
         }
 
+        static bool is_socket_server_msg(ipc_msg_ptr msg) {
+            if (!msg || !msg->msg_session) {
+                return false;
+            }
+            server_ptr svr = msg->msg_session->get_server();
+            if (!svr) {
+                return false;
+            }
+            const std::string name = svr->name();
+            return (name == "SocketServer") || (name == "!SocketServer");
+        }
+
         void ipc_context::complete(int res) {
+            if (is_socket_server_msg(msg)) {
+                LOG_INFO(SERVICE_ESOCK, "ESOCK-DONE op=0x{:02X} sts=0x{:08X} result={} thr={}", msg->function,
+                    msg->request_sts.ptr_address(), res, msg->own_thr ? msg->own_thr->name() : "?");
+            }
+
             if (msg->request_sts) {
                 kernel_system *kern = sys->get_kernel_system();
                 (msg->request_sts.get(msg->own_thr->owning_process()))->set(res, kern->is_eka1());

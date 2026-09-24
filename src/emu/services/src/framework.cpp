@@ -116,6 +116,15 @@ namespace eka2l1::service {
             LOG_INFO(SERVICE_TRACK, "Calling service: {}, id: {}", raw_name(), process_msg->function);
         }
 
+        if ((raw_name() == "SocketServer") || (raw_name() == "!SocketServer")) {
+            // Every socket-server request with its raw arguments; ESOCK-DONE lines carry the results.
+            const bool is_sync = process_msg->own_thr && (process_msg->own_thr->get_sync_msg() == process_msg);
+            LOG_INFO(SERVICE_ESOCK, "ESOCK-REQ op=0x{:02X} {} sts=0x{:08X} thr={} args=[{:08X} {:08X} {:08X} {:08X}] flag=0x{:X}",
+                process_msg->function, is_sync ? "sync" : "async", process_msg->request_sts.ptr_address(),
+                process_msg->own_thr ? process_msg->own_thr->name() : "?", process_msg->args.args[0], process_msg->args.args[1],
+                process_msg->args.args[2], process_msg->args.args[3], process_msg->args.flag);
+        }
+
         ss_ite->second->fetch(&context);
     }
 }
