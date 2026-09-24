@@ -43,7 +43,10 @@
 #include <kernel/codeseg.h>
 #include <kernel/kernel.h>
 
+#include <algorithm>
 #include <cctype>
+#include <unordered_map>
+#include <vector>
 
 namespace eka2l1::hle {
     static std::array<std::u16string, 2> LDD_SKIP_LOAD_LIST = {
@@ -405,7 +408,13 @@ namespace eka2l1::hle {
         return "";
     }
 
+    // Map name -> UID3s its patch must not touch ([requirements] not_uid3). Kept here rather than in
+    // patch_info so the requirement needs no header change.
+    static std::unordered_map<std::string, std::vector<std::uint32_t>> patch_excluded_uid3s;
+
     void lib_manager::load_patch_libraries(const std::string &patch_folder) {
+        patch_excluded_uid3s.clear();
+
         auto iterator = common::make_directory_iterator(patch_folder, "*.map");
         if (!iterator) {
             return;
@@ -456,6 +465,20 @@ namespace eka2l1::hle {
                 common::ini_pair *u3 = req_section->find("uid3")->get_as<common::ini_pair>();
                 if (u3) {
                     u3->get(&the_patch.req_uid3_, 1, 0);
+                }
+
+                // not_uid3: leave a DLL with this UID3 alone although its name matches. The routes of a
+                // general patch are EKA2 export ordinals; Series 80 v2's ecam.dll (0x101FB4C3) numbers its
+                // exports differently, and patching it turned the Nokia 9300 Control panel's camera probe
+                // into a read of 0x1B8.
+                common::ini_pair *not_u3 = req_section->find("not_uid3")->get_as<common::ini_pair>();
+                if (not_u3) {
+                    std::uint32_t excluded = 0;
+                    not_u3->get(&excluded, 1, 0);
+
+                    if (excluded) {
+                        patch_excluded_uid3s[original_map_name].push_back(excluded);
+                    }
                 }
 
                 if (req_section->find("inrom") != nullptr) {
@@ -613,6 +636,14 @@ namespace eka2l1::hle {
     }
 
     static bool does_condition_meet_for_patch(codeseg_ptr original, patch_info &patch, const bool check_name) {
+        const auto excluded = patch_excluded_uid3s.find(patch.name_);
+        if (excluded != patch_excluded_uid3s.end()) {
+            const std::uint32_t uid3 = std::get<2>(original->get_uids());
+            if (std::find(excluded->second.begin(), excluded->second.end(), uid3) != excluded->second.end()) {
+                return false;
+            }
+        }
+
         if (check_name) {
             const std::string org_name = original->name();
 

@@ -23,6 +23,7 @@
 #include <common/log.h>
 #include <common/platform.h>
 #include <common/thread.h>
+#include <common/watchdog.h>
 
 #include <kernel/timing.h>
 
@@ -117,9 +118,14 @@ namespace eka2l1 {
         common::set_thread_name(TIMING_THREAD_NAME);
         common::set_thread_priority(common::thread_priority_very_high);
 
+        // advance() runs the timer callbacks, where a screen redraw blocks on the
+        // graphics driver, so this thread is the first to stop when the display jams.
+        common::watched_thread watch(TIMING_THREAD_NAME);
+
         while (!should_stop_) {
             while (!should_stop_ && !should_paused_) {
                 const std::optional<std::uint64_t> next_microseconds = advance();
+                watch.beat();
 
                 if ((next_microseconds.has_value()) && (acc_level_ < realtime_level_high)) {
 #if EKA2L1_PLATFORM(ANDROID)
@@ -130,14 +136,17 @@ namespace eka2l1 {
 #endif
 
                     if (next_microseconds > IGNORE_AND_GO_PASS_MICROSECS) {
+                        const common::parked_scope parked("the next scheduled timer");
                         new_event_evt_.wait_for(next_microseconds.value());
                     }
                 } else {
+                    const common::parked_scope parked("a timer event");
                     new_event_evt_.wait();
                 }
             }
 
             if (should_paused_) {
+                const common::parked_scope parked("the timer being paused");
                 pause_evt_.wait();
             }
         }

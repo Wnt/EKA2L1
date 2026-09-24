@@ -22,6 +22,7 @@
 #include <common/platform.h>
 #include <common/path.h>
 #include <common/rgb.h>
+#include <common/watchdog.h>
 #include <fstream>
 #include <sstream>
 
@@ -1948,8 +1949,15 @@ namespace eka2l1::drivers {
     }
 
     void ogl_graphics_driver::run() {
+        common::watched_thread watch("Graphics thread");
+
         while (!should_stop) {
-            std::optional<command_list> list = list_queue.pop();
+            std::optional<command_list> list;
+
+            {
+                const common::parked_scope parked("an empty graphics command queue");
+                list = list_queue.pop();
+            }
 
             if (!list) {
                 if (!should_stop) {
@@ -1964,6 +1972,7 @@ namespace eka2l1::drivers {
             }
 
             delete[] list->base_;
+            watch.beat();
         }
     }
 

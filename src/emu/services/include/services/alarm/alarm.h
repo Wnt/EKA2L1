@@ -41,6 +41,25 @@ namespace eka2l1 {
         alarm_state_notified
     };
 
+    // Symbian OS 7.0s (Series 80): the ROM's AlarmServer.exe connects to "AlarmAlertServer", which EikSrv
+    // hosts on the device. EikSrv does not run under --run, so the connect failed with KErrNotFound, the
+    // AlarmServer exited and its clients (Clock, Calendar) showed "Unable to find the specified object".
+    // The 9300 AlarmServer's alert client (TVersion 2.0.0) sends ops 1, 2, 3, 5 and 9 synchronously and
+    // 0 (response notify), 4 (set alarm), 6 and 7 (logon) asynchronously. No alert UI exists to answer the
+    // asynchronous ones, so they stay pending; every synchronous request succeeds.
+    class alarm_alert_server_eka1 : public service::typical_server {
+    public:
+        explicit alarm_alert_server_eka1(eka2l1::system *sys);
+
+        void connect(service::ipc_context &context) override;
+    };
+
+    struct alarm_alert_session_eka1 : public service::typical_session {
+        explicit alarm_alert_session_eka1(service::typical_server *serv, const kernel::uid ss_id, epoc::version client_version);
+
+        void fetch(service::ipc_context *ctx) override;
+    };
+
     class alarm_server : public service::typical_server {
     public:
         explicit alarm_server(eka2l1::system *sys);
