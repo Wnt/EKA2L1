@@ -40,6 +40,7 @@
 #include <services/centralrepo/centralrepo.h>
 #include <services/comm/comm.h>
 #include <services/domain/domain.h>
+#include <services/dos/dos.h>
 #include <services/drm/helper.h>
 #include <services/drm/notifier/notifier.h>
 #include <services/drm/rights/rights.h>
@@ -193,6 +194,31 @@ namespace eka2l1::epoc {
         // The prop belongs to HAL server, but the key usuage is unknown. (TODO)
         DEFINE_INT_PROP_D(sys, epoc::SYS_CATEGORY, epoc::UNK_KEY1, 65535);
         DEFINE_INT_PROP(sys, epoc::SYS_CATEGORY, epoc::PHONE_POWER_KEY, system_agent_state_on);
+
+        if (kern->is_eka1() && sys->is_s80_device_active()) {
+            // System Agent states the Series 80 shell reads at boot (sacls.h). On a phone the
+            // DOS server's plug-in publishes them from the modem; without one they are
+            // KErrNotFound, and SysAp/Startup treat that as a fault. SIM present and ok,
+            // no network, no charger, battery full, no call, ports idle, boxes empty.
+            static constexpr std::pair<std::uint32_t, std::int32_t> S80_SYSTEM_AGENT_STATES[] = {
+                { 0x100052C6, 0 }, // KUidSIMStatus = ESASimOk
+                { 0x100052C7, 1 }, // KUidNetworkStatus = ESANetworkUnAvailable
+                { 0x100052C8, 0 }, // KUidNetworkStrength = ESANetworkStrengthNone
+                { 0x100052C9, 1 }, // KUidChargerStatus = ESAChargerDisconnected
+                { 0x100052CA, 2 }, // KUidBatteryStrength = ESABatteryFull
+                { 0x100052CB, 0 }, // KUidCurrentCall = ESACallNone
+                { 0x100052CC, 0 }, // KUidDataPort = ESADataPortIdle
+                { 0x100052CD, 0 }, // KUidInboxStatus = ESAInboxEmpty
+                { 0x100052CE, 0 }, // KUidOutboxStatus = ESAOutboxEmpty
+                { 0x100052D0, 0 }, // KUidAlarm = ESAAlarmOff
+            };
+
+            for (const auto &[key, value] : S80_SYSTEM_AGENT_STATES) {
+                if (!kern->get_prop(epoc::SYS_CATEGORY, key)) {
+                    DEFINE_INT_PROP(sys, epoc::SYS_CATEGORY, key, value);
+                }
+            }
+        }
         DEFINE_INT_PROP(sys, epoc::SYS_CATEGORY, epoc::SOFTWARE_INSTALL_KEY, 0);
         DEFINE_INT_PROP(sys, epoc::SYS_CATEGORY, epoc::SOFTWARE_LASTEST_UID_INSTALLATION, 0);
 
@@ -354,6 +380,16 @@ namespace eka2l1 {
             CREATE_SERVER(sys, akn_skin_server);
 
             CREATE_SERVER(sys, system_agent_server);
+
+            // Nokia's Domestic OS server: the ROM's own DosServer.exe would load Nokia.dsy
+            // and wait for a cellular modem that is not here. Series 80 v2's boot chain
+            // (Starter via SysUtil) asks it for the start-up reason before it starts a
+            // single application, so answer like Nokia's phone-less SDK plug-in does.
+            // EKA2L1_NO_HLE_DOS=1 leaves the ROM's server in charge.
+            if (sys->get_kernel_system()->is_eka1() && sys->is_s80_device_active()
+                && (std::getenv("EKA2L1_NO_HLE_DOS") == nullptr)) {
+                CREATE_SERVER(sys, dos_server);
+            }
             CREATE_SERVER(sys, unipertar_server);
 
             if (sys->get_symbian_version_use() >= epocver::epoc95) {

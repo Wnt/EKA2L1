@@ -54,6 +54,7 @@ add_library(epocservs
         include/services/drm/rights/db.h
         include/services/drm/rights/import.h
         include/services/drm/rights/rights.h
+        include/services/dos/dos.h
         include/services/drm/helper.h
         include/services/etel/common.h
         include/services/etel/etel.h
@@ -214,6 +215,7 @@ add_library(epocservs
         src/drm/rights/import.cpp
         src/drm/rights/object.cpp
         src/drm/rights/rights.cpp
+        src/dos/dos.cpp
         src/drm/helper.cpp
         src/etel/etel.cpp
         src/etel/line.cpp
