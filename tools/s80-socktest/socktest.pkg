@@ -1,0 +1,4 @@
+; socktest.pkg - SIS package for SockTest (Symbian OS 7.0s, Series 80 v2). makesis socktest.pkg
+&EN
+#{"SockTest"},(0x0A5C7E57),1,0,0
+"build\SockTest.exe"-"C:\System\Programs\SockTest.exe"
