@@ -101,6 +101,7 @@ namespace eka2l1 {
     }
 
     static void start_ipc_watch(kernel_system *kern, ntimer *timing);
+    static void schedule_ipc_watch_once(ntimer *timing);
     static void stop_ipc_watch(ntimer *timing);
 
     kernel_system::~kernel_system() {
@@ -999,6 +1000,7 @@ namespace eka2l1 {
         }
 
         LOG_TRACE(KERNEL, "Spawned process: {}, entry point = 0x{:X}", process_name, cs->get_code_run_addr(&(*pr)));
+        schedule_ipc_watch_once(timing_);
         
         if (eka2l1::has_root_name(path, true)) {
             cs->set_full_path(path);
@@ -1180,6 +1182,7 @@ namespace eka2l1 {
     }
 
     static int ipc_watch_evt = -1;
+    static bool ipc_watch_scheduled = false;
     static std::uint64_t ipc_watch_interval_us = 0;
 
     static void start_ipc_watch(kernel_system *kern, ntimer *timing) {
@@ -1198,7 +1201,16 @@ namespace eka2l1 {
 
             timing->schedule_event(static_cast<std::int64_t>(ipc_watch_interval_us), ipc_watch_evt, 0);
         });
+    }
 
+    // The system resets the timer after the kernel (dropping every scheduled event), so the first dump is
+    // scheduled when the first process is spawned rather than at registration.
+    static void schedule_ipc_watch_once(ntimer *timing) {
+        if ((ipc_watch_evt < 0) || ipc_watch_scheduled) {
+            return;
+        }
+
+        ipc_watch_scheduled = true;
         timing->schedule_event(static_cast<std::int64_t>(ipc_watch_interval_us), ipc_watch_evt, 0);
     }
 
@@ -1210,6 +1222,7 @@ namespace eka2l1 {
         timing->unschedule_event(ipc_watch_evt, 0);
         timing->remove_event(ipc_watch_evt);
         ipc_watch_evt = -1;
+        ipc_watch_scheduled = false;
     }
 
     void kernel_system::free_msg(ipc_msg_ptr msg) {
