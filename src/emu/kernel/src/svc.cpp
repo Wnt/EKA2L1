@@ -6466,6 +6466,7 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0x32, thread_id),
         BRIDGE_REGISTER(0x3C, thread_request_count),
         BRIDGE_REGISTER(0x3D, thread_exit_type),
+        BRIDGE_REGISTER(0x3E, thread_exit_reason), // EKA1 RThread::ExitReason (seen from a 7.0s client)
         BRIDGE_REGISTER(0x4D, wait_for_any_request),
         BRIDGE_REGISTER(0x4F, uchar_fold),
         BRIDGE_REGISTER(0x51, uchar_lowercase),
