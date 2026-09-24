@@ -211,6 +211,12 @@ namespace eka2l1::epoc {
                 { 0x100052CD, 0 }, // KUidInboxStatus = ESAInboxEmpty
                 { 0x100052CE, 0 }, // KUidOutboxStatus = ESAOutboxEmpty
                 { 0x100052D0, 0 }, // KUidAlarm = ESAAlarmOff
+                // States the ROM's EikSrvUi and the SDK emulator's EikSrv ask for at start-up
+                // (IPC trace) that no public header names. 0 is the "nothing special" value of
+                // every System Agent state enum above.
+                { 0x100052E9, 0 },
+                { 0x1000A97F, 0 },
+                { 0x101F8ED7, 0 },
             };
 
             for (const auto &[key, value] : S80_SYSTEM_AGENT_STATES) {

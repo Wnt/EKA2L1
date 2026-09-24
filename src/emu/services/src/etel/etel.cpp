@@ -432,6 +432,14 @@ namespace eka2l1 {
                 is_supported_by_module(ctx);
                 break;
 
+            // RTelServer::SetPriorityClient / SetExtendedErrorGranularity: bookkeeping the
+            // 7.0s Series 80 servers (SecurityServer, CbsServer, SatServer) do right after
+            // LoadPhoneModule. Nothing to remember here; they just need their answer.
+            case epoc::etel_old_set_priority_client:
+            case epoc::etel_old_set_extend_error_granularity:
+                ctx->complete(epoc::error_none);
+                break;
+
             default:
                 std::optional<std::uint32_t> subsess_id = ctx->get_argument_value<std::uint32_t>(3);
 
@@ -442,7 +450,11 @@ namespace eka2l1 {
                     }
                 }
 
-                LOG_ERROR(SERVICE_ETEL, "Unimplemented ETel server opcode {}", ctx->msg->function);
+                // A synchronous request left pending stops the client thread for good; the
+                // ROM's SecurityServer never came up because of exactly that, and EikSrvUi
+                // cannot construct without it.
+                LOG_ERROR(SERVICE_ETEL, "Unimplemented ETel server opcode {}, completed as not supported", ctx->msg->function);
+                ctx->complete(epoc::error_not_supported);
                 break;
             }
         } else {

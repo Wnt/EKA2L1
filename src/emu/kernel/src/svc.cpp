@@ -1352,7 +1352,7 @@ namespace eka2l1::epoc {
         }
 
         if (kern->get_config()->log_ipc) {
-            LOG_TRACE(KERNEL, "Sending {} sync to {}", ord, ss->get_server()->name());
+            LOG_TRACE(KERNEL, "Sending {} sync to {} from {}", ord, ss->get_server()->name(), kern->crr_thread()->name());
         }
 
         const std::string server_name = ss->get_server()->name();
