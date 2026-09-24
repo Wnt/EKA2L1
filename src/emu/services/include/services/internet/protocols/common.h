@@ -66,6 +66,8 @@ namespace eka2l1::epoc::internet {
         INET_NEXT_INTERFACE_OPT = 0x212,
 
         // Option in TCP socket option level
-        INET_TCP_NO_DELAY_OPT = 0x304
+        INET_TCP_NO_DELAY_OPT = 0x304,
+        INET_TCP_KEEP_ALIVE_OPT = 0x305,
+        INET_TCP_OOB_INLINE_OPT = 0x315
     };
 }
