@@ -179,6 +179,18 @@ namespace eka2l1::epoc::adapter {
         virtual std::optional<open_font_metrics> get_nearest_supported_metric(const std::size_t face_index, const std::uint16_t targeted_font_size,
             std::uint32_t *metric_identifier = nullptr, bool is_design_font_size = true) = 0;
 
+        /**
+         * @brief Like get_nearest_supported_metric, but for a face that holds sizes of several styles (a GDR
+         *        typeface bundles bold, italic and regular bitmaps under one name) prefer the requested one.
+         *
+         * @param wanted_style               open_font_face_attrib bold/italic flags of the request.
+         */
+        virtual std::optional<open_font_metrics> get_nearest_supported_metric_for_style(const std::size_t face_index,
+            const std::uint16_t targeted_font_size, const std::uint32_t wanted_style, std::uint32_t *metric_identifier = nullptr,
+            bool is_design_font_size = true) {
+            return get_nearest_supported_metric(face_index, targeted_font_size, metric_identifier, is_design_font_size);
+        }
+
         virtual std::uint8_t get_atlas_bitmap_bits_per_pixel() {
             return 8;
         }

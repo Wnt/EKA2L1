@@ -21,6 +21,9 @@
 #include <common/log.h>
 #include <services/fbs/adapter/gdr_font_adapter.h>
 
+#include <algorithm>
+#include <limits>
+
 namespace eka2l1::epoc::adapter {
     static open_font_metrics build_of_metrics_from_font_bitmap(const loader::gdr::font_bitmap *target_bitmap) {
         open_font_metrics metrics;
@@ -287,21 +290,68 @@ namespace eka2l1::epoc::adapter {
 
     std::optional<open_font_metrics> gdr_font_file_adapter::get_nearest_supported_metric(const std::size_t face_index, const std::uint16_t targeted_font_size,
         std::uint32_t *metric_identifier, bool is_design_font_size) {
+        return get_nearest_supported_metric_for_style(face_index, targeted_font_size, 0, metric_identifier, is_design_font_size);
+    }
+
+    // CFontStore::GetNearestTypefaceFontBitmap: of a typeface's bitmaps, take the tallest that is not
+    // taller than asked for (the shortest when all are taller), then among the bitmaps of that height
+    // the one whose weight and posture do not exceed the request, preferring the closest. Bitmaps listed
+    // with a height factor above one are scaled copies, which are not rendered scaled here: skip them.
+    std::optional<open_font_metrics> gdr_font_file_adapter::get_nearest_supported_metric_for_style(const std::size_t face_index,
+        const std::uint16_t targeted_font_size, const std::uint32_t wanted_style, std::uint32_t *metric_identifier,
+        bool is_design_font_size) {
         if ((face_index >= store_.typefaces_.size()) || !is_valid()) {
             LOG_ERROR(SERVICE_FBS, "The font is not ready or the face index is out of bounds!");
             return std::nullopt;
         }
 
-        std::int16_t min_delta = std::numeric_limits<std::int16_t>::max();
+        const loader::gdr::typeface &face = store_.typefaces_[face_index];
+        const std::uint8_t want_weight = (wanted_style & open_font_face_attrib::bold) ? 1 : 0;
+        const std::uint8_t want_posture = (wanted_style & open_font_face_attrib::italic) ? 1 : 0;
+
+        auto scaled = [&](const std::size_t i) {
+            return (i < face.header_.bitmap_headers_.size()) && (face.header_.bitmap_headers_[i].height_factor_ > 1);
+        };
+
+        int chosen_height = -1;
+        int shortest = std::numeric_limits<int>::max();
+
+        for (std::size_t i = 0; i < face.font_bitmaps_.size(); i++) {
+            if (scaled(i)) {
+                continue;
+            }
+
+            const int height = face.font_bitmaps_[i]->header_.cell_height_in_pixels_;
+            shortest = std::min(shortest, height);
+
+            if ((height <= targeted_font_size) && (height > chosen_height)) {
+                chosen_height = height;
+            }
+        }
+
+        if (chosen_height < 0) {
+            chosen_height = shortest;
+        }
+
         const loader::gdr::font_bitmap *target_bitmap = nullptr;
         std::size_t final_index = 0;
+        int best_rank = -1;
 
-        loader::gdr::typeface face = store_.typefaces_[face_index];
         for (std::size_t i = 0; i < face.font_bitmaps_.size(); i++) {
-            const std::int16_t delta = (static_cast<std::int16_t>(face.font_bitmaps_[i]->header_.cell_height_in_pixels_) - static_cast<std::int16_t>(targeted_font_size));
-            if (delta < min_delta) {
-                target_bitmap = face.font_bitmaps_[i];
-                min_delta = delta;
+            const loader::gdr::font_bitmap *bitmap = face.font_bitmaps_[i];
+
+            if (scaled(i) || (bitmap->header_.cell_height_in_pixels_ != chosen_height)) {
+                continue;
+            }
+
+            // Exact style first, then one that does not exceed the request, then anything at this height.
+            const bool within = (bitmap->header_.stroke_weight_ <= want_weight) && (bitmap->header_.posture_ <= want_posture);
+            const bool exact = (bitmap->header_.stroke_weight_ == want_weight) && (bitmap->header_.posture_ == want_posture);
+            const int rank = exact ? 2 : (within ? 1 : 0);
+
+            if (rank > best_rank) {
+                best_rank = rank;
+                target_bitmap = bitmap;
                 final_index = i;
             }
         }
@@ -309,7 +359,7 @@ namespace eka2l1::epoc::adapter {
         if (target_bitmap == nullptr) {
             return std::nullopt;
         }
-        
+
         if (metric_identifier != nullptr) {
             *metric_identifier = static_cast<std::uint32_t>(final_index);
         }

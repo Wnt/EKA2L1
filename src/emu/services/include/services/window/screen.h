@@ -132,8 +132,13 @@ namespace eka2l1::epoc {
 
         bool sync_screen_buffer = false;
 
-        // Whether the last composed frame has the focused group's text cursor XOR-ed into it.
+        // Whether the last composed frame has the focused group's text cursor XOR-ed into it, and where:
+        // a flash flip that matches this geometry is done in place.
         bool text_cursor_drawn = false;
+        bool text_cursor_geometry_valid = false;
+        bool text_cursor_drawn_hollow = false;
+        eka2l1::rect text_cursor_drawn_rect;
+        common::region text_cursor_drawn_region;
 
         bool direct_framebuffer_mapped = false;
         framebuffer_observer direct_framebuffer;
@@ -287,10 +292,10 @@ namespace eka2l1::epoc {
         bool redraw(drivers::graphics_command_builder &builder, const bool need_bind);
 
         /**
-         * \brief Where the focused group's text cursor shows in this frame, if it shows at all
-         *        (flash phase, window visibility and clipping taken into account).
+         * \brief Where the focused group's text cursor is, if it is on screen at all (window visibility
+         *        and clipping taken into account), and whether this is the "on" half of its flash.
          */
-        bool text_cursor_to_draw(common::region &region, eka2l1::rect &rect, eka2l1::vec4 &color, bool &hollow);
+        bool text_cursor_to_draw(common::region &region, eka2l1::rect &rect, eka2l1::vec4 &color, bool &hollow, bool &flash_on);
         void draw_text_cursor(drivers::graphics_command_builder &builder, const common::region &region,
             const eka2l1::rect &rect, const eka2l1::vec4 &color, const bool hollow);
 

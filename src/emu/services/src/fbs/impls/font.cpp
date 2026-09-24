@@ -640,13 +640,34 @@ namespace eka2l1 {
 
         static constexpr int max_acceptable_delta = 1;
 
+        // The style asked for, in face attribute terms: it picks the bitmap inside a GDR typeface.
+        std::uint32_t wanted_style = 0;
+        if (spec.style.flags & epoc::font_style_base::bold) {
+            wanted_style |= epoc::open_font_face_attrib::bold;
+        }
+        if (spec.style.flags & epoc::font_style_base::italic) {
+            wanted_style |= epoc::open_font_face_attrib::italic;
+        }
+
+        std::uint32_t wanted_metric_identifier = 0;
+        const std::optional<epoc::open_font_metrics> wanted_metrics = ofi_suit->adapter->get_nearest_supported_metric_for_style(ofi_suit->idx,
+            is_design_height ? static_cast<std::uint16_t>(spec.height) : static_cast<std::uint16_t>(size_info->x), wanted_style,
+            &wanted_metric_identifier, is_design_height);
+
+        if (!wanted_metrics) {
+            ctx->complete(epoc::error_not_found);
+            return;
+        }
+
         for (auto &font_obj : server<fbs_server>()->font_obj_container) {
             fbsfont *the_font = reinterpret_cast<fbsfont *>(font_obj.get());
             const std::int32_t delta = common::abs(is_design_height ? (spec.height - the_font->of_info.metrics.design_height) : (size_info->x - the_font->of_info.metrics.max_height));
 
-            // Same adapter and font size is not to much of a difference
+            // Same adapter and font size is not to much of a difference. A bitmap typeface holds several
+            // bitmaps of one height (bold, regular), so reuse only the very bitmap this request resolves to.
             if ((the_font->of_info.face_attrib.name.to_std_string(nullptr) == ofi_suit->face_attrib.name.to_std_string(nullptr))
-                && (delta <= max_acceptable_delta)) {
+                && (delta <= max_acceptable_delta)
+                && (ofi_suit->adapter->vectorizable() || (the_font->of_info.metric_identifier == wanted_metric_identifier))) {
                 font = the_font;
                 break;
             }
@@ -657,9 +678,8 @@ namespace eka2l1 {
             font->serv = serv;
 
             font->of_info = *ofi_suit;
-            font->of_info.metrics = ofi_suit->adapter->get_nearest_supported_metric(ofi_suit->idx,
-                 is_design_height ? static_cast<std::uint16_t>(spec.height) : static_cast<std::uint16_t>(size_info->x),
-                 &font->of_info.metric_identifier, is_design_height).value();
+            font->of_info.metrics = wanted_metrics.value();
+            font->of_info.metric_identifier = wanted_metric_identifier;
 
             epoc::bitmapfont_base *bmpfont = create_bitmap_open_font(font->of_info, spec, ctx->msg->own_thr->owning_process());
 
