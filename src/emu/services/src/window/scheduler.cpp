@@ -111,6 +111,27 @@ namespace eka2l1::epoc {
         schedule_scans(driver);
     }
 
+    void animation_scheduler::schedule_if_sooner(drivers::graphics_driver *driver, screen *scr, const std::uint64_t time) {
+        const std::lock_guard<std::mutex> guard(lock_);
+
+        if (schedules_.size() <= scr->number) {
+            return;
+        }
+
+        // schedule() lets the latest request win, which is what frame pacing wants. A timed
+        // redraw (the text cursor flash) must never push back a redraw that is already due sooner.
+        anim_schedule &existing = schedules_[scr->number];
+        if (existing.scheduled && (existing.time <= time)) {
+            return;
+        }
+
+        existing.scr = scr;
+        existing.time = time;
+        existing.scheduled = true;
+
+        schedule_scans(driver);
+    }
+
     void animation_scheduler::unschedule(const int screen_number) {
         const std::lock_guard<std::mutex> guard(lock_);
 
