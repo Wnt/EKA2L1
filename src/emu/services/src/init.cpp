@@ -22,6 +22,7 @@
 #include <common/path.h>
 #include <common/platform.h>
 
+#include <cstdlib>
 #include <memory>
 #include <unordered_map>
 
@@ -299,14 +300,24 @@ namespace eka2l1 {
             if (cfg->enable_srv_drm)
                 CREATE_SERVER(sys, drm_helper_server);
 
+            // EKA2L1_ROM_EIKSRV=1 (experiment): leave the Eikon server to the ROM (eiksrvs.exe on
+            // Series 80 v2), so its EikSrvUi owns the application buttons and the task list. The ROM
+            // server also brings up the notifier and view servers itself, and a pre-registered HLE of
+            // either name makes that construction leave with KErrAlreadyExists.
+            const bool rom_eiksrv = std::getenv("EKA2L1_ROM_EIKSRV") != nullptr;
+
             // These needed to be HLEd
             CREATE_SERVER(sys, applist_server);
             CREATE_SERVER(sys, oom_ui_app_server);
             CREATE_SERVER(sys, hwrm_server);
-            CREATE_SERVER(sys, view_server);
+            if (!rom_eiksrv) {
+                CREATE_SERVER(sys, view_server);
+            }
             CREATE_SERVER(sys, remcon_server);
             CREATE_SERVER(sys, etel_server);
-            CREATE_SERVER(sys, notifier_server);
+            if (!rom_eiksrv) {
+                CREATE_SERVER(sys, notifier_server);
+            }
             CREATE_SERVER(sys, msv_server);
 
             CREATE_SERVER(sys, sensor_server);
@@ -325,7 +336,9 @@ namespace eka2l1 {
             // Not really sure about this one
             CREATE_SERVER(sys, keysound_server);
 
-            CREATE_SERVER(sys, eikappui_server);
+            if (!rom_eiksrv) {
+                CREATE_SERVER(sys, eikappui_server);
+            }
             // The AknIconServer HLE renders icons itself (lunasvg / mbm) instead of the guest
             // ROM server. It exists to work around N95-class S60v3 FP1 ROMs, whose guest icon
             // server rasterises scalable NVG menu icons through software OpenVG -- the emulator

@@ -22,6 +22,7 @@
 #include <services/window/op.h>
 #include <services/window/window.h>
 
+#include <services/applist/applist.h>
 #include <services/fbs/fbs.h>
 #include <services/utils.h>
 #include <services/window/classes/bitmap.h>
@@ -49,6 +50,7 @@
 #include <config/app_settings.h>
 #include <config/config.h>
 
+#include <utils/apacmd.h>
 #include <utils/err.h>
 #include <utils/event.h>
 
@@ -69,6 +71,24 @@
 namespace eka2l1::epoc {
     bool operator<(const event_capture_key_notifier &lhs, const event_capture_key_notifier &rhs) {
         return lhs.pri_ < rhs.pri_;
+    }
+
+    const event_capture_key_notifier *find_key_capture(cp_queue<event_capture_key_notifier> &requests,
+        const event_key_capture_type type, const std::uint32_t modifiers) {
+        const event_capture_key_notifier *best = nullptr;
+
+        // The queue's backing store is a heap, not a sorted sequence: scan it.
+        for (auto ite = requests.begin(); ite != requests.end(); ite++) {
+            if (!ite->user || (ite->type_ != type) || ((modifiers & ite->modifiers_mask_) != ite->modifiers_)) {
+                continue;
+            }
+
+            if (!best || (ite->pri_ > best->pri_) || ((ite->pri_ == best->pri_) && (ite->id > best->id))) {
+                best = &(*ite);
+            }
+        }
+
+        return best;
     }
 
     graphics_orientation number_to_orientation(int rot) {
@@ -1311,6 +1331,29 @@ namespace eka2l1::epoc {
             get_double_click_settings(ctx, cmd);
             break;
 
+        case ws_cl_op_clear_hot_keys:
+            // This server installs no system hotkeys; RWsSession::ClearHotKeys still needs its reply.
+            ctx.complete(epoc::error_none);
+            break;
+
+        case ws_cl_op_start_custom_text_cursor:
+        case ws_cl_op_complete_custom_text_cursor:
+            // RWsSession::SetCustomTextCursor is synchronous and the Eikon server registers its cursors
+            // at start-up; bitmap text cursors are not implemented, so answer instead of parking the caller.
+            ctx.complete(epoc::error_not_supported);
+            break;
+
+        case ws_cl_op_set_system_pointer_cursor:
+        case ws_cl_op_claim_system_pointer_cursor_list:
+        case ws_cl_op_free_system_pointer_cursor_list:
+        case ws_cl_op_set_default_system_pointer_cursor:
+        case ws_cl_op_clear_default_system_pointer_cursor:
+            // The Eikon server claims the system pointer-cursor list and installs its cursors while it
+            // constructs (Series 80 EikSrvUi does, before it captures the application buttons). There is
+            // no system cursor list here; accept the requests so the server gets past them.
+            ctx.complete(epoc::error_none);
+            break;
+
         default:
             LOG_INFO(SERVICE_WINDOW, "Unimplemented ClOp: 0x{:x}", cmd.header.op);
             break;
@@ -1321,12 +1364,10 @@ namespace eka2l1::epoc {
         const ws::uid id = ++get_ws().key_capture_uid_counter;
         notifier.id = id;
 
+        // Keyed by the code the client passed: a key code for CaptureKey, a scan code for
+        // CaptureKeyUpAndDowns. The priority is the client's own; the newest request wins a tie
+        // (find_key_capture), which is what bumping it used to approximate.
         window_server::key_capture_request_queue &rqueue = get_ws().key_capture_requests[notifier.keycode_];
-
-        if (!rqueue.empty() && notifier.pri_ == 0) {
-            notifier.pri_ = rqueue.top().pri_ + 1;
-        }
-
         rqueue.push(std::move(notifier));
 
         return id;
@@ -1951,6 +1992,11 @@ namespace eka2l1 {
                     } else if (scancode == '5') {
                         guest_event.key_evt_.scancode = epoc::std_key_space;
                     }
+
+                    if (s80_handle_app_key(guest_event)) {
+                        // The application button belongs to the shell, never to the focused application.
+                        break;
+                    }
                 } else if (is_uiq_2_device()) {
                     guest_event.key_evt_.scancode = uiq_2_scancode(guest_event.key_evt_.scancode);
                 }
@@ -2133,6 +2179,172 @@ namespace eka2l1 {
         return screens;
     }
 
+    void window_server::remove_key_captures(epoc::window *owner, const std::uint32_t id) {
+        for (auto &[key, requests] : key_capture_requests) {
+            key_capture_request_queue retained;
+
+            while (!requests.empty()) {
+                const epoc::event_capture_key_notifier request = requests.top();
+                requests.pop();
+
+                if ((request.user != owner) || (id && (request.id != id))) {
+                    retained.push(request);
+                }
+            }
+
+            requests = std::move(retained);
+        }
+    }
+
+    epoc::window_group *window_server::find_group_of_app(const std::uint32_t app_uid) {
+        epoc::window_group *fallback = nullptr;
+
+        for (epoc::screen *scr = screens; scr; scr = scr->next) {
+            for (epoc::window_group *group = reinterpret_cast<epoc::window_group *>(scr->root->child); group;
+                 group = reinterpret_cast<epoc::window_group *>(group->sibling)) {
+                kernel::process *owner = group->uid_owner_change_process;
+
+                // The starter of an app can die before the app's group does (see ~window_group).
+                if (!owner || (kern->get_by_id<kernel::process>(group->uid_owner_change_process_id) != owner)
+                    || (owner->get_uid() != app_uid)) {
+                    continue;
+                }
+
+                if (group->can_receive_focus()) {
+                    return group;
+                }
+
+                if (!fallback) {
+                    fallback = group;
+                }
+            }
+        }
+
+        return fallback;
+    }
+
+    bool window_server::switch_to_app(const std::uint32_t app_uid, const char *why) {
+        kern->lock();
+        epoc::window_group *group = find_group_of_app(app_uid);
+
+        if (group) {
+            LOG_INFO(SERVICE_WINDOW, "{}: app 0x{:X} is running, bringing group {} ({}) to the front", why, app_uid,
+                group->id, common::ucs2_to_utf8(group->name));
+
+            group->set_position(0);
+            kern->unlock();
+
+            return true;
+        }
+
+        kern->unlock();
+
+        applist_server *applist = reinterpret_cast<applist_server *>(kern->get_by_name<service::server>(
+            get_app_list_server_name_by_epocver(kern->get_epoc_version())));
+
+        apa_app_registry *registry = applist ? applist->get_registration(app_uid) : nullptr;
+
+        if (!registry) {
+            LOG_ERROR(SERVICE_WINDOW, "{}: app 0x{:X} is not running and not registered", why, app_uid);
+            return false;
+        }
+
+        epoc::apa::command_line cmdline;
+        cmdline.launch_cmd_ = epoc::apa::command_create;
+
+        if (!applist->launch_app(*registry, cmdline, nullptr, nullptr)) {
+            LOG_ERROR(SERVICE_WINDOW, "{}: launching app 0x{:X} ({}) failed", why, app_uid,
+                common::ucs2_to_utf8(registry->mandatory_info.long_caption.to_std_string(nullptr)));
+            return false;
+        }
+
+        LOG_INFO(SERVICE_WINDOW, "{}: launched app 0x{:X} ({})", why, app_uid,
+            common::ucs2_to_utf8(registry->mandatory_info.long_caption.to_std_string(nullptr)));
+
+        return true;
+    }
+
+    // Series 80 v2 (Nokia 9300/9500): the eight application buttons above the keyboard are
+    // EStdKeyApplication0..7. On the device they belong to the Eikon server's UI library
+    // (EikSrvUi.dll; its "EikAppKey" active object captures their ups and downs and launches or
+    // foregrounds the bound application; SysAp.app holds the Desk and "My own" buttons the same
+    // way), and the focused application never sees them. EKA2L1 replaces the Eikon server with
+    // an HLE that owns no keys and SysAp does not run, so the buttons did nothing here.
+    // The window server stands in for that owner while no guest has captured the key itself: a
+    // ROM Eikon server brought up later takes the buttons over without a code change.
+    struct s80_app_key_binding {
+        std::int32_t scancode;
+        std::uint32_t app_uid;
+        const char *button;
+    };
+
+    static const s80_app_key_binding S80_APP_KEY_BINDINGS[] = {
+        { epoc::std_key_application_0, 0x101F8E4F, "Desk" },
+        { epoc::std_key_application_1, 0x101F4D0B, "Telephone" },      // PhoneApp
+        { epoc::std_key_application_2, 0x100053B3, "Messaging" },      // MCentre
+        { epoc::std_key_application_3, 0x101F4DE8, "Web" },            // Opera
+        { epoc::std_key_application_4, 0x100007ED, "Contacts" },       // Cmgr (contacts manager)
+        { epoc::std_key_application_5, 0x10003A64, "Documents" },      // CWord
+        { epoc::std_key_application_6, 0x10003A5C, "Calendar" },       // Agenda
+        { epoc::std_key_application_7, 0x100007BA, "My own" },         // user-assigned on the device (SharedData 101f8e64 "Own key uid"); File manager is the factory default
+    };
+
+    static const s80_app_key_binding *s80_app_key_binding_of(const std::int32_t scancode) {
+        for (const s80_app_key_binding &binding : S80_APP_KEY_BINDINGS) {
+            if (binding.scancode == scancode) {
+                return &binding;
+            }
+        }
+
+        return nullptr;
+    }
+
+    bool window_server::s80_handle_app_key(const epoc::event &guest_event) {
+        const std::int32_t scancode = guest_event.key_evt_.scancode;
+        const s80_app_key_binding *binding = s80_app_key_binding_of(scancode);
+
+        if (!binding || (s80_app_key_evt_ < 0)) {
+            return false;
+        }
+
+        // A guest that captured the button (the ROM's Eikon server) owns it; leave it to the shipper.
+        const std::uint32_t keycode = epoc::map_scancode_to_keycode(static_cast<epoc::std_scan_code>(scancode));
+
+        auto captured = [this](const std::uint32_t key) {
+            auto ite = key_capture_requests.find(key);
+            return (ite != key_capture_requests.end()) && !ite->second.empty();
+        };
+
+        if (captured(keycode) || captured(static_cast<std::uint32_t>(scancode))) {
+            return false;
+        }
+
+        if (guest_event.type == epoc::event_code::key_down) {
+            kern->get_ntimer()->schedule_event(0, s80_app_key_evt_, static_cast<std::uint64_t>(scancode));
+        }
+
+        return true;
+    }
+
+    void window_server::s80_perform_app_key(const std::uint32_t scancode) {
+        const s80_app_key_binding *binding = s80_app_key_binding_of(static_cast<std::int32_t>(scancode));
+
+        if (!binding) {
+            return;
+        }
+
+        if (!binding->app_uid) {
+            LOG_INFO(SERVICE_WINDOW, "S80 {} button: no application bound", binding->button);
+            return;
+        }
+
+        std::string why = "S80 ";
+        why += binding->button;
+        why += " button";
+
+        switch_to_app(binding->app_uid, why.c_str());
+    }
+
     epoc::window_group *window_server::get_group_from_id(const epoc::ws::uid id) {
         epoc::screen *current = screens;
 
@@ -2287,6 +2499,13 @@ namespace eka2l1 {
     void window_server::init_repeatable() {
         initial_repeat_delay_ = epoc::WS_DEFAULT_KEYBOARD_REPEAT_INIT_DELAY;
         next_repeat_delay_ = epoc::WS_DEFAULT_KEYBOARD_REPEAT_NEXT_DELAY;
+
+        // Input arrives on the frontend thread; the app switch touches the kernel, so it runs from the
+        // emulator's timer thread like the key repeats below.
+        s80_app_key_evt_ = kern->get_ntimer()->register_event("WsS80AppKeyEvent",
+            [this](std::uint64_t data, int microsecs_late) {
+                s80_perform_app_key(static_cast<std::uint32_t>(data));
+            });
 
         repeatable_event_ = kern->get_ntimer()->register_event("WsRepeatableKeyEvent",
             [this](std::uint64_t data, std::uint64_t microsecs_late) {

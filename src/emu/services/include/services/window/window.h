@@ -101,15 +101,22 @@ namespace eka2l1::epoc {
 
     struct event_capture_key_notifier : public event_notifier_base {
         event_key_capture_type type_;
-        std::uint32_t keycode_;
+        std::uint32_t keycode_;         ///< Key code for a CaptureKey request, scan code for CaptureKeyUpAndDowns.
         std::uint32_t modifiers_mask_;
         std::uint32_t modifiers_;
-        std::uint32_t pri_;
+        std::int32_t pri_;              ///< Signed, as in RWindowGroup::CaptureKey.
 
         std::uint32_t id;
     };
 
     bool operator<(const event_capture_key_notifier &lhs, const event_capture_key_notifier &rhs);
+
+    /**
+     * \brief The capture request that wins a key: the highest-priority request of the given type whose
+     *        modifier condition the event satisfies (latest registration on a tie), or null.
+     */
+    const event_capture_key_notifier *find_key_capture(cp_queue<event_capture_key_notifier> &requests,
+        const event_key_capture_type type, const std::uint32_t modifiers);
 
     struct pixel_twips_and_rot {
         eka2l1::vec2 pixel_size;
@@ -446,9 +453,33 @@ namespace eka2l1 {
         void make_mouse_event(drivers::input_event &driver_evt_, epoc::event &guest_evt_, epoc::screen *scr);
         bool update_pointer_position(const epoc::event &guest_evt_);
 
+        // Series 80 v2 shell: the hardware application buttons (see s80_handle_app_key in window.cpp).
+        int s80_app_key_evt_{ -1 };
+        bool s80_handle_app_key(const epoc::event &guest_event);
+        void s80_perform_app_key(const std::uint32_t scancode);
+
     public:
         explicit window_server(system *sys);
         ~window_server();
+
+        /**
+         * \brief Drop key capture requests owned by a window group: all of them when it dies, or the one
+         *        with the given id on RWindowGroup::CancelCaptureKey / CancelCaptureKeyUpAndDowns.
+         */
+        void remove_key_captures(epoc::window *owner, const std::uint32_t id = 0);
+
+        /**
+         * \brief The topmost window group owned by the application with this UID3 (focus-receivable first).
+         */
+        epoc::window_group *find_group_of_app(const std::uint32_t app_uid);
+
+        /**
+         * \brief Bring the application with this UID3 to the front: its window group goes to ordinal
+         *        position 0 and takes focus; if it has no group it is launched through the app list server.
+         *        This is what a Series 80 application button does; a host control channel can use it too.
+         * \returns false if the application is neither running nor registered.
+         */
+        bool switch_to_app(const std::uint32_t app_uid, const char *why = "host");
 
         void map_direct_framebuffer(epoc::screen *scr);
 
