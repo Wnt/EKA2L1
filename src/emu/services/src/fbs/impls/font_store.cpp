@@ -378,6 +378,16 @@ namespace eka2l1::epoc {
                     }
                 }
             }
+
+            // A bitmap (GDR) typeface carries every weight and posture it has under one name, and its
+            // attributes are the union of them, so it never equals a single-style request above. The
+            // store picks a typeface by name and the style inside it (CFontStore::GetNearestTypeface,
+            // GetNearestTypefaceFontBitmap): take it by name, the adapter chooses the bitmap.
+            for (auto &info : open_font_store) {
+                if (!info.adapter->vectorizable() && (common::compare_ignore_case(info.face_attrib.name.to_std_string(nullptr), wanted_name) == 0)) {
+                    return &info;
+                }
+            }
         }
 
         open_font_info *best = nullptr;
