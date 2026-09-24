@@ -416,9 +416,107 @@ namespace eka2l1::epoc {
         }
     }
 
+    bool screen::text_cursor_to_draw(common::region &region, eka2l1::rect &rect, eka2l1::vec4 &color, bool &hollow) {
+        if (!focus) {
+            return false;
+        }
+
+        canvas_base *win = focus->text_cursor_window();
+        if (!win || !win->can_be_physically_seen()) {
+            return false;
+        }
+
+        const text_cursor &cursor = focus->cursor;
+
+        if (focus->text_cursor_flashing()) {
+            // CWsSpriteManager::CurrentCursorFlashState: on for the first half of every second.
+            const std::uint64_t now = focus->client->get_ws().get_ntimer()->microseconds();
+            if ((now % 1000000) >= 500000) {
+                return false;
+            }
+        }
+
+        rect = eka2l1::rect(win->abs_rect.top + cursor.pos, cursor.size);
+        if ((rect.size.x <= 0) || (rect.size.y <= 0)) {
+            return false;
+        }
+
+        // RWsTextCursor::Draw: the window's visible region, cut to the client's clip rectangle.
+        region = win->visible_region;
+        region.clip(rect);
+
+        if (cursor.clipped) {
+            eka2l1::rect clip = cursor.clip_rect;
+            clip.top += win->abs_rect.top;
+            region.clip(clip);
+        }
+
+        region.clip(eka2l1::rect({ 0, 0 }, current_mode().size));
+        if (region.empty()) {
+            return false;
+        }
+
+        color = common::rgba_to_vec(cursor.color);
+        color.w = 255;
+        hollow = (cursor.type == text_cursor::type_hollow_rectangle);
+
+        return true;
+    }
+
+    void screen::draw_text_cursor(drivers::graphics_command_builder &builder, const common::region &region,
+        const eka2l1::rect &rect, const eka2l1::vec4 &color, const bool hollow) {
+        // EDrawModeXOR with the cursor colour. Blending src * (1 - dst) is exactly that for the white
+        // cursor the text views use, which inverts the pixels under it.
+        builder.clip_bitmap_region(region, display_scale_factor);
+        builder.set_feature(drivers::graphics_feature::blend, true);
+        builder.blend_formula(drivers::blend_equation::add, drivers::blend_equation::add,
+            drivers::blend_factor::one_minus_current_color, drivers::blend_factor::zero,
+            drivers::blend_factor::zero, drivers::blend_factor::one);
+        builder.set_brush_color_detail(color);
+
+        auto scaled = [this](const eka2l1::rect &r) {
+            return eka2l1::rect(r.top * display_scale_factor, r.size * display_scale_factor);
+        };
+
+        if (hollow) {
+            const int w = rect.size.x;
+            const int h = rect.size.y;
+
+            builder.draw_rectangle(scaled(eka2l1::rect(rect.top, { w, 1 })));
+            if (h > 1) {
+                builder.draw_rectangle(scaled(eka2l1::rect(rect.top + eka2l1::vec2(0, h - 1), { w, 1 })));
+            }
+            if (h > 2) {
+                builder.draw_rectangle(scaled(eka2l1::rect(rect.top + eka2l1::vec2(0, 1), { 1, h - 2 })));
+                if (w > 1) {
+                    builder.draw_rectangle(scaled(eka2l1::rect(rect.top + eka2l1::vec2(w - 1, 1), { 1, h - 2 })));
+                }
+            }
+        } else {
+            builder.draw_rectangle(scaled(rect));
+        }
+
+        builder.set_feature(drivers::graphics_feature::blend, false);
+        builder.set_feature(drivers::graphics_feature::stencil_test, false);
+        builder.set_feature(drivers::graphics_feature::clipping, false);
+    }
+
     bool screen::redraw(drivers::graphics_command_builder &builder, const bool need_bind) {
         if (need_update_visible_regions()) {
             recalculate_visible_regions();
+        }
+
+        common::region cursor_region;
+        eka2l1::rect cursor_rect;
+        eka2l1::vec4 cursor_color;
+        bool cursor_hollow = false;
+
+        const bool cursor_shown = text_cursor_to_draw(cursor_region, cursor_rect, cursor_color, cursor_hollow);
+
+        // The cursor is XOR-ed over the composed screen: a frame that shows it, or showed it last time,
+        // is rebuilt from the redraw stores instead of being drawn over (which would XOR it twice).
+        if (cursor_shown || text_cursor_drawn) {
+            flags_ |= FLAG_SERVER_REDRAW_PENDING;
         }
 
         if (need_bind) {
@@ -443,6 +541,12 @@ namespace eka2l1::epoc {
         // just not really worth the time, since GPU draws so fast. Symbian code still has it though.
         window_drawer_walker adrawwalker(builder);
         root->walk_tree_back_to_front(&adrawwalker);
+
+        if (cursor_shown) {
+            draw_text_cursor(builder, cursor_region, cursor_rect, cursor_color, cursor_hollow);
+        }
+
+        text_cursor_drawn = cursor_shown;
 
         // Done! Unbind and submit this to the driver
         builder.bind_bitmap(0);
@@ -475,6 +579,14 @@ namespace eka2l1::epoc {
         }
 
         fire_screen_redraw_callbacks(false);
+
+        // A flashing cursor needs a frame at every half-second flip, even when nothing else changes.
+        if (focus && focus->text_cursor_flashing() && focus->text_cursor_window()) {
+            window_server &serv = focus->client->get_ws();
+            const std::uint64_t now = serv.get_ntimer()->microseconds();
+
+            serv.get_anim_scheduler()->schedule_if_sooner(driver, this, (now / 500000 + 1) * 500000);
+        }
     }
 
     void screen::deinit(drivers::graphics_driver *driver) {

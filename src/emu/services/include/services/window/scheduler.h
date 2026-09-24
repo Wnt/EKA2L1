@@ -128,6 +128,13 @@ namespace eka2l1::epoc {
         void schedule(drivers::graphics_driver *driver, screen *scr, const std::uint64_t time);
 
         /**
+         * \brief Schedule a screen redraw at a given time, unless one is already due sooner.
+         * \param scr    The screen to be scheduled.
+         * \param time   Time for the redraw to occurs, since 1/1/1970.
+         */
+        void schedule_if_sooner(drivers::graphics_driver *driver, screen *scr, const std::uint64_t time);
+
+        /**
          * \brief Unschedule a screen redraw.
          * \param screen_number The number of the screen.
          */

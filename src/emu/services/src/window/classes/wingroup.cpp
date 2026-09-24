@@ -23,6 +23,8 @@
 #include <services/window/classes/winuser.h>
 #include <services/window/op.h>
 #include <services/window/opheader.h>
+#include <services/window/scheduler.h>
+#include <services/window/screen.h>
 #include <services/window/window.h>
 #include <utils/sec.h>
 
@@ -32,7 +34,10 @@
 #include <config/app_settings.h>
 #include <kernel/kernel.h>
 
+#include <kernel/timing.h>
 #include <utils/err.h>
+
+#include <cstddef>
 
 namespace eka2l1::epoc {
     static epoc::security_policy key_capture_policy({ epoc::cap_sw_event });
@@ -151,21 +156,97 @@ namespace eka2l1::epoc {
         std::copy(data_vec.begin(), data_vec.begin() + dest_size, data);
     }
 
-    void window_group::set_text_cursor(service::ipc_context &context, ws_cmd &cmd) {
-        // Warn myself in the future!
-        LOG_WARN(SERVICE_WINDOW, "Set cursor text is mostly a stubbed now");
+    // RWsTextCursor::SetL (WSERV TCURSOR.CPP): the cursor belongs to the group, lives on one of its
+    // client windows, and is drawn by the server - XOR-ed over the screen, flashing on the first half of
+    // every second unless EFlagNoFlash - only while the group has focus. The client gets no reply.
+    void window_group::set_text_cursor(service::ipc_context &context, ws_cmd &cmd, const bool clipped) {
+        if (cmd.header.cmd_len < offsetof(ws_cmd_set_text_cursor, clip_rect) + (clipped ? sizeof(eka2l1::rect) : 0)) {
+            LOG_ERROR(SERVICE_WINDOW, "SetTextCursor command too short ({} bytes)", cmd.header.cmd_len);
+            context.complete(epoc::error_argument);
+            return;
+        }
 
         ws_cmd_set_text_cursor *cmd_set = reinterpret_cast<decltype(cmd_set)>(cmd.data_ptr);
-        auto canvas_base_to_set = reinterpret_cast<canvas_base *>(client->get_object(cmd_set->win));
+        canvas_base *win = dynamic_cast<canvas_base *>(client->get_object(cmd_set->win));
 
-        if (!canvas_base_to_set || (canvas_base_to_set->type != window_kind::client)) {
-            LOG_ERROR(SERVICE_WINDOW, "Window not found or not client kind to set text cursor");
+        if (!win || (win->type != window_kind::client) || (win->get_group() != this)) {
+            LOG_ERROR(SERVICE_WINDOW, "Text cursor window 0x{:X} is not a client window of this group", cmd_set->win);
             context.complete(epoc::error_not_found);
             return;
         }
 
-        canvas_base_to_set->cursor_pos = cmd_set->pos + canvas_base_to_set->pos;
+        text_cursor updated;
+        updated.type = cmd_set->cursor.type;
+        updated.window_handle = cmd_set->win;
+        updated.window_id = win->id;
+        updated.pos = eka2l1::vec2(cmd_set->pos.x, cmd_set->pos.y - cmd_set->cursor.ascent);
+        updated.size = eka2l1::vec2(cmd_set->cursor.width, cmd_set->cursor.height);
+        updated.flags = cmd_set->cursor.flags;
+        updated.color = cmd_set->cursor.color;
+
+        if (!client->get_ws().get_kernel_system()->is_eka1()) {
+            // TRgb::Internal() crosses the wire as 0xaarrggbb from EKA2 on, as for the GC colours.
+            updated.color = (updated.color & 0xFF00FF00) | ((updated.color & 0xFF) << 16) | ((updated.color & 0xFF0000) >> 16);
+        }
+
+        updated.clipped = clipped;
+
+        if (clipped) {
+            updated.clip_rect = cmd_set->clip_rect;
+            updated.clip_rect.transform_from_symbian_rectangle();
+        }
+
+        if ((updated.type != text_cursor::type_rectangle) && (updated.type != text_cursor::type_hollow_rectangle)) {
+            // Custom (sprite) text cursors are not drawn; keep the group's cursor off rather than guess.
+            LOG_TRACE(SERVICE_WINDOW, "Text cursor type {} is not drawn", updated.type);
+            updated.type = text_cursor::type_none;
+        }
+
+        const bool changed = !(updated == cursor);
+        cursor = updated;
+
+        if (changed) {
+            text_cursor_changed();
+        }
+
         context.complete(epoc::error_none);
+    }
+
+    void window_group::cancel_text_cursor(service::ipc_context &context, ws_cmd &cmd) {
+        if (cursor.type != text_cursor::type_none) {
+            cursor = text_cursor{};
+            text_cursor_changed();
+        }
+
+        context.complete(epoc::error_none);
+    }
+
+    void window_group::text_cursor_changed() {
+        if (scr && (scr->focus == this)) {
+            // The old cursor pixels are XOR-ed into the composed screen: rebuild it from the redraw store.
+            scr->flags_ |= screen::FLAG_SERVER_REDRAW_PENDING;
+            client->get_ws().get_anim_scheduler()->schedule(client->get_ws().get_graphics_driver(), scr,
+                client->get_ws().get_ntimer()->microseconds());
+        }
+    }
+
+    canvas_base *window_group::text_cursor_window() {
+        if (cursor.type == text_cursor::type_none) {
+            return nullptr;
+        }
+
+        // The window may have been freed since; the handle slot can even hold a new object by now.
+        canvas_base *win = dynamic_cast<canvas_base *>(client->get_object(cursor.window_handle));
+        if (!win || (win->id != cursor.window_id)) {
+            cursor = text_cursor{};
+            return nullptr;
+        }
+
+        return win;
+    }
+
+    bool window_group::text_cursor_flashing() const {
+        return (cursor.type != text_cursor::type_none) && !(cursor.flags & text_cursor::flag_no_flash);
     }
 
     void window_group::add_priority_key(service::ipc_context &context, ws_cmd &cmd) {
@@ -302,7 +383,17 @@ namespace eka2l1::epoc {
         }
 
         case EWsWinOpSetTextCursor: {
-            set_text_cursor(ctx, cmd);
+            set_text_cursor(ctx, cmd, false);
+            break;
+        }
+
+        case EWsWinOpSetTextCursorClipped: {
+            set_text_cursor(ctx, cmd, true);
+            break;
+        }
+
+        case EWsWinOpCancelTextCursor: {
+            cancel_text_cursor(ctx, cmd);
             break;
         }
 

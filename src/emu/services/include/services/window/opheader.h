@@ -142,11 +142,22 @@ namespace eka2l1 {
         vec2 right_bottom_pos;
     };
 
+    // TTextCursor (w32std.h / textcursor.h)
+    struct ws_text_cursor {
+        std::int32_t type;
+        std::int32_t height;
+        std::int32_t ascent;
+        std::int32_t width;
+        std::uint32_t flags;
+        std::uint32_t color;
+    };
+
+    // TWsWinCmdSetTextCursor (w32cmd.h): the rectangle is only meaningful for SetTextCursorClipped.
     struct ws_cmd_set_text_cursor {
         uint32_t win;
         vec2 pos;
-
-        // TODO: Add more
+        ws_text_cursor cursor;
+        eka2l1::rect clip_rect;
     };
 
     struct ws_cmd_send_event_to_window_group {

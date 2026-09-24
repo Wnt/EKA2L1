@@ -20,6 +20,7 @@
 #pragma once
 
 #include <common/container.h>
+#include <common/region.h>
 #include <common/vecx.h>
 
 #include <drivers/graphics/common.h>
@@ -130,6 +131,9 @@ namespace eka2l1::epoc {
         std::int32_t active_dsa_count_ = 0;
 
         bool sync_screen_buffer = false;
+
+        // Whether the last composed frame has the focused group's text cursor XOR-ed into it.
+        bool text_cursor_drawn = false;
 
         bool direct_framebuffer_mapped = false;
         framebuffer_observer direct_framebuffer;
@@ -281,6 +285,14 @@ namespace eka2l1::epoc {
 
         void deinit(drivers::graphics_driver *driver);
         bool redraw(drivers::graphics_command_builder &builder, const bool need_bind);
+
+        /**
+         * \brief Where the focused group's text cursor shows in this frame, if it shows at all
+         *        (flash phase, window visibility and clipping taken into account).
+         */
+        bool text_cursor_to_draw(common::region &region, eka2l1::rect &rect, eka2l1::vec4 &color, bool &hollow);
+        void draw_text_cursor(drivers::graphics_command_builder &builder, const common::region &region,
+            const eka2l1::rect &rect, const eka2l1::vec4 &color, const bool hollow);
 
         /**
          * \brief Redraw the screen.
