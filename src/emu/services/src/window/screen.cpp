@@ -416,7 +416,7 @@ namespace eka2l1::epoc {
         }
     }
 
-    bool screen::text_cursor_to_draw(common::region &region, eka2l1::rect &rect, eka2l1::vec4 &color, bool &hollow) {
+    bool screen::text_cursor_to_draw(common::region &region, eka2l1::rect &rect, eka2l1::vec4 &color, bool &hollow, bool &flash_on) {
         if (!focus) {
             return false;
         }
@@ -428,12 +428,11 @@ namespace eka2l1::epoc {
 
         const text_cursor &cursor = focus->cursor;
 
+        // CWsSpriteManager::CurrentCursorFlashState: on for the first half of every second.
+        flash_on = true;
         if (focus->text_cursor_flashing()) {
-            // CWsSpriteManager::CurrentCursorFlashState: on for the first half of every second.
             const std::uint64_t now = focus->client->get_ws().get_ntimer()->microseconds();
-            if ((now % 1000000) >= 500000) {
-                return false;
-            }
+            flash_on = ((now % 1000000) < 500000);
         }
 
         rect = eka2l1::rect(win->abs_rect.top + cursor.pos, cursor.size);
@@ -510,11 +509,40 @@ namespace eka2l1::epoc {
         eka2l1::rect cursor_rect;
         eka2l1::vec4 cursor_color;
         bool cursor_hollow = false;
+        bool cursor_flash_on = false;
 
-        const bool cursor_shown = text_cursor_to_draw(cursor_region, cursor_rect, cursor_color, cursor_hollow);
+        const bool cursor_present = text_cursor_to_draw(cursor_region, cursor_rect, cursor_color, cursor_hollow, cursor_flash_on);
+        const bool cursor_shown = cursor_present && cursor_flash_on;
 
-        // The cursor is XOR-ed over the composed screen: a frame that shows it, or showed it last time,
-        // is rebuilt from the redraw stores instead of being drawn over (which would XOR it twice).
+        // A frame that only flips the flash of an unchanged cursor: XOR it in place. White XOR is its own
+        // inverse, so this restores exactly what was under it, and an idle editor costs one small draw per
+        // half second instead of recomposing every window from its redraw store.
+        const bool white_cursor = (cursor_color.x == 255) && (cursor_color.y == 255) && (cursor_color.z == 255);
+        const bool only_flip = cursor_present && white_cursor && text_cursor_geometry_valid
+            && ((flags_ & (FLAG_SERVER_REDRAW_PENDING | FLAG_CLIENT_REDRAW_PENDING)) == 0) && (active_dsa_count_ == 0)
+            && (cursor_rect == text_cursor_drawn_rect) && (cursor_hollow == text_cursor_drawn_hollow)
+            && cursor_region.identical(text_cursor_drawn_region);
+
+        if (only_flip) {
+            if (cursor_shown == text_cursor_drawn) {
+                return false;
+            }
+
+            if (need_bind) {
+                builder.bind_bitmap(screen_texture);
+            }
+
+            builder.set_feature(eka2l1::drivers::graphics_feature::cull, false);
+            builder.set_feature(eka2l1::drivers::graphics_feature::depth_test, false);
+            draw_text_cursor(builder, cursor_region, cursor_rect, cursor_color, cursor_hollow);
+            builder.bind_bitmap(0);
+
+            text_cursor_drawn = cursor_shown;
+            return true;
+        }
+
+        // Otherwise a frame that shows the cursor, or showed it last time, is rebuilt from the redraw
+        // stores instead of being drawn over, which could XOR it twice.
         if (cursor_shown || text_cursor_drawn) {
             flags_ |= FLAG_SERVER_REDRAW_PENDING;
         }
@@ -547,6 +575,14 @@ namespace eka2l1::epoc {
         }
 
         text_cursor_drawn = cursor_shown;
+
+        // What an in-place flip must match. A frame that composed everything is a known base either way.
+        text_cursor_geometry_valid = cursor_present && ((flags_ & FLAG_SERVER_REDRAW_PENDING) != 0);
+        if (text_cursor_geometry_valid) {
+            text_cursor_drawn_region = cursor_region;
+            text_cursor_drawn_rect = cursor_rect;
+            text_cursor_drawn_hollow = cursor_hollow;
+        }
 
         // Done! Unbind and submit this to the driver
         builder.bind_bitmap(0);
