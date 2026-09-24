@@ -27,6 +27,13 @@ namespace eka2l1::common {
      * NOTE: CODE REVIEWED FROM SYMBIAN OPEN SOURCE.
      */
 
+    // TRect::IsEmpty(): a rectangle with no width or no height covers no pixel, and TRegion never
+    // holds one. rect::empty() only catches the 0x0 case, so a 0xN or Nx0 rectangle used to enter a
+    // region that nothing could subtract it from again (rect::intersect treats it as disjoint).
+    static bool covers_no_pixel(const eka2l1::rect &rect) {
+        return (rect.size.x <= 0) || (rect.size.y <= 0);
+    }
+
     eka2l1::rect region::bounding_rect() const {
         eka2l1::vec2 tl{ INT_MAX, INT_MAX };
         eka2l1::vec2 br{ INT_MIN, INT_MIN };
@@ -42,7 +49,7 @@ namespace eka2l1::common {
     }
 
     bool region::add_rect(const eka2l1::rect &rect) {
-        if (rect.empty()) {
+        if (covers_no_pixel(rect)) {
             return false;
         }
 
@@ -85,12 +92,17 @@ namespace eka2l1::common {
     }
 
     void region::eliminate(const eka2l1::rect &rect) {
-        if (rect.empty()) {
+        if (covers_no_pixel(rect)) {
             return;
         }
 
         std::vector<eka2l1::rect> remaining;
         for (const auto &original : rects_) {
+            if (covers_no_pixel(original)) {
+                // Put in behind add_rect's back (rects_ is public); it covers nothing, drop it.
+                continue;
+            }
+
             const auto overlap = original.intersect(rect);
             if (overlap.empty()) {
                 remaining.push_back(original);
@@ -128,7 +140,7 @@ namespace eka2l1::common {
             for (std::size_t j = 0; j < target.rects_.size(); j++) {
                 eka2l1::rect the_intersect = target.rects_[j].intersect(rects_[i]);
 
-                if (!the_intersect.empty()) {
+                if (!covers_no_pixel(the_intersect)) {
                     intersection.rects_.push_back(the_intersect);
                 }
             }

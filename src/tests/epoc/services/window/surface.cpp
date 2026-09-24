@@ -449,3 +449,26 @@ TEST_CASE("Retained GDI accepts both straight and premultiplied alpha bitmaps", 
         REQUIRE(driver.images[ui] == std::vector<std::uint8_t>{ 128, 0, 0, 128 });
     }
 }
+
+TEST_CASE("A redraw of a rectangle that covers no pixel leaves no segment behind", "[gdi_store]") {
+    // BeginRedraw on a 0x34 spacer window, as S80 Sheet does hundreds of times a second while the
+    // invalid region is stuck: each pass used to leave one more segment that nothing could remove.
+    epoc::gdi_store_command_collection store;
+
+    for (int i = 0; i < 64; i++) {
+        store.add_new_segment(eka2l1::rect({ 0, 0 }, { 0, 34 }), epoc::gdi_store_command_segment_pending_redraw);
+        store.promote_last_segment();
+    }
+
+    REQUIRE(store.get_segments().empty());
+    REQUIRE(store.get_current_segment() == nullptr);
+
+    // A real redraw still replaces the one before it.
+    store.add_new_segment(eka2l1::rect({ 0, 0 }, { 10, 10 }), epoc::gdi_store_command_segment_pending_redraw);
+    store.promote_last_segment();
+    store.add_new_segment(eka2l1::rect({ 0, 0 }, { 10, 10 }), epoc::gdi_store_command_segment_pending_redraw);
+    store.promote_last_segment();
+
+    REQUIRE(store.get_segments().size() == 1);
+    REQUIRE(store.get_segments()[0]->type_ == epoc::gdi_store_command_segment_redraw);
+}
