@@ -130,6 +130,10 @@ namespace eka2l1::drivers {
         explicit graphics_driver(graphic_api api)
             : api_(api) {}
 
+        log_class wait_report_class() const override {
+            return DRIVER_GRAPHICS;
+        }
+
         virtual ~graphics_driver() {
         }
 

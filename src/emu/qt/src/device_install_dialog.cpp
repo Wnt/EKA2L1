@@ -23,6 +23,7 @@
 #include <common/fileutils.h>
 #include <common/log.h>
 #include <common/path.h>
+#include <common/stall.h>
 
 #include <system/installation/firmware.h>
 #include <system/installation/rpkg.h>
@@ -152,8 +153,16 @@ void device_install_dialog::on_install_triggered() {
             return canceled_.load();
         };
 
+        // Blocking-queued, so this waits on the UI thread and cannot be given a
+        // timeout; bracket it instead, and leave a breadcrumb naming the wait.
         auto select_variant_cb_func = [this](const std::vector<std::string> &list) {
-            return emit firmware_variant_selects(list);
+            const eka2l1::common::wait_scope scope("the UI thread to pick a firmware variant");
+            LOG_TRACE(eka2l1::FRONTEND_UI, "Asking the UI thread to pick one of {} firmware variants", list.size());
+
+            const int chosen = emit firmware_variant_selects(list);
+
+            LOG_TRACE(eka2l1::FRONTEND_UI, "The firmware variant choice was answered");
+            return chosen;
         };
 
         std::string firmware_code;

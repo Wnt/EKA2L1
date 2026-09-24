@@ -99,3 +99,5 @@ LOGCLASS(HLE_GLES1, "Hle.GLES1", "GLES1 implementation")
 LOGCLASS(HLE_DISPATCHER, "Hle.Dispatcher", "HLE dispatch manager")
 LOGCLASS(HLE_CAMERA, "Hle.Camera", "Camera")
 LOGCLASS(J2ME, "J2ME", "Symbian's J2ME service")
+
+LOGCLASS(WATCHDOG, "Watchdog", "Freeze watchdog")
