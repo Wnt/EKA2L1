@@ -35,6 +35,14 @@ namespace eka2l1::mem {
         , user_dll_static_data_sec_(ctrl->mem_map_old_ ? rom_bss_eka1 : dll_static_data, ctrl->mem_map_old_ ? dll_static_data_eka1_end : shared_data, ctrl->page_size()) {
     }
 
+    multiple_mem_model_process::~multiple_mem_model_process() {
+        // Local chunks go first: their teardown unassigns page tables from this address space.
+        chunks_.clear();
+        attached_.clear();
+
+        reinterpret_cast<control_multiple *>(control_)->free_addr_space(addr_space_id_);
+    }
+
     static constexpr std::size_t MAX_CHUNK_ALLOW_PER_PROCESS = 1024;
 
     multiple_mem_model_chunk *multiple_mem_model_process::allocate_chunk_struct_ptr() {

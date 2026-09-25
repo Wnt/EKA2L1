@@ -67,6 +67,16 @@ namespace eka2l1::mem {
         asid rollover_fresh_addr_space() override;
 
         /**
+         * \brief Give an address space back once the process that owned it is gone.
+         *
+         * Its page directory forgets the dead process's local page tables and becomes available to
+         * rollover_fresh_addr_space() again. Without this every process ever created kept its ASID, and
+         * the 256th process got none: its local addresses then resolved to nothing and the first
+         * kernel call that touched its stack faulted on the host.
+         */
+        void free_addr_space(const asid id);
+
+        /**
          * \brief Assign page tables at linear base address to page directories.
          */
         void assign_page_table(page_table *tab, const vm_address linear_addr, const std::uint32_t flags, asid *id_list = nullptr, const std::uint32_t id_list_size = 0) override;
