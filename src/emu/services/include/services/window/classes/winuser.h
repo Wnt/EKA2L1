@@ -93,6 +93,10 @@ namespace eka2l1::epoc {
         common::region visible_region;
         common::region shape_region;
 
+        // The extent (abs_rect) the visible region was last worked out for: the region's own origin, to tell
+        // an area that became uncovered from one the window only moved or grew into.
+        eka2l1::rect visible_region_extent;
+
         int shadow_height;
 
         std::uint32_t max_pointer_buffer_;
