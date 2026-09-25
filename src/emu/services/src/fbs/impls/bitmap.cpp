@@ -34,6 +34,8 @@
 #include <services/window/common.h>
 
 #include <kernel/kernel.h>
+#include <loader/rom.h>
+#include <mem/mem.h>
 #include <system/epoc.h>
 #include <utils/err.h>
 #include <utils/guest/akn.h>
@@ -1077,11 +1079,23 @@ namespace eka2l1 {
             return (ptr < committed_end) ? static_cast<std::size_t>(committed_end - ptr) : 0;
         }
 
-        // Pixels always come out of one of the two chunks above, whatever the
-        // bitmap's age or format: even a bitmap read straight from a ROM MBM is
-        // decompressed into them (load_data_to_rom). A pointer that lands outside
-        // both was computed from a header field that no longer describes reality,
-        // and following it walks host memory the emulator does not own.
+        // EKA1 clients use the CBitwiseBitmaps of a ROM image MBM in place (CFbsBitmap::Load after
+        // RFs::IsFileInRom), so their pixels are ROM bytes: readable up to the end of the ROM image.
+        if (kern && kern->is_eka1()) {
+            loader::rom *rom = kern->get_rom_info();
+            if (rom && rom->header.rom_size) {
+                const std::uint8_t *rom_host = eka2l1::ptr<const std::uint8_t>(rom->header.rom_base).get(sys->get_memory_system());
+                if (rom_host && (ptr >= rom_host) && (ptr < rom_host + rom->header.rom_size)) {
+                    return static_cast<std::size_t>(rom_host + rom->header.rom_size - ptr);
+                }
+            }
+        }
+
+        // Otherwise pixels always come out of one of the two chunks above, whatever
+        // the bitmap's age or format: a bitmap read from a ROM MBM through the
+        // server is decompressed into them (load_data_to_rom). A pointer that lands
+        // outside both was computed from a header field that no longer describes
+        // reality, and following it walks host memory the emulator does not own.
         return 0;
     }
 

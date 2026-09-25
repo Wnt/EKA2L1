@@ -18,6 +18,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <kernel/kernel.h>
 #include <services/window/classes/scrdvc.h>
 #include <services/window/classes/wingroup.h>
 #include <services/window/classes/winuser.h>
@@ -95,6 +96,7 @@ namespace eka2l1::epoc {
         : window(client, scr, parent, window_kind::group)
         , uid_owner_change_callback_handle(0)
         , uid_owner_change_process(nullptr)
+        , uid_owner_change_process_id(0)
         , screen_change_event_handle(0) {
         set_initial_state();
 
@@ -112,11 +114,19 @@ namespace eka2l1::epoc {
             window_group_process_uid_type_change_callback);
 
         uid_owner_change_process = mama;
+        uid_owner_change_process_id = mama->unique_id();
     }
 
     window_group::~window_group() {
+        // A dead group must not keep winning key captures: its client handle is gone.
+        client->get_ws().remove_key_captures(this);
+
         if (uid_owner_change_process) {
-            uid_owner_change_process->unregister_uid_type_change_callback(uid_owner_change_callback_handle);
+            kernel_system *kern = client->get_ws().get_kernel_system();
+
+            if (kern->get_by_id<kernel::process>(uid_owner_change_process_id) == uid_owner_change_process) {
+                uid_owner_change_process->unregister_uid_type_change_callback(uid_owner_change_callback_handle);
+            }
         }
         
         remove_from_sibling_list();
@@ -347,6 +357,19 @@ namespace eka2l1::epoc {
 
             ctx.complete(client->add_event_notifier(capture_key_notify));
 
+            break;
+        }
+
+        case EWsWinOpCancelCaptureKey:
+        case EWsWinOpCancelCaptureKeyUpsAndDowns: {
+            // The argument is the handle CaptureKey returned (our notifier id); 0 cancels nothing.
+            const std::uint32_t capture_id = *reinterpret_cast<const std::uint32_t *>(cmd.data_ptr);
+
+            if (capture_id) {
+                client->get_ws().remove_key_captures(this, capture_id);
+            }
+
+            ctx.complete(epoc::error_none);
             break;
         }
 

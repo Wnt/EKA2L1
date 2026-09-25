@@ -28,6 +28,7 @@
 #include <vfs/vfs.h>
 
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -184,6 +185,7 @@ namespace eka2l1 {
         enum app_filter_method {
             APP_FILTER_BY_EMBED,
             APP_FILTER_BY_FLAGS,
+            APP_FILTER_ALL,
             APP_FILTER_NONE
         };
 
@@ -192,7 +194,18 @@ namespace eka2l1 {
         std::uint32_t flags_match_value_;
         std::uint32_t requested_screen_mode_;
 
+        // Bit (1 << TApaAppCapability::TEmbeddability) per accepted embeddability (TApaEmbeddabilityFilter).
+        std::uint32_t embeddability_mask_;
+
         app_filter_method filter_method_;
+
+        // Symbian 7.0s SetNotify: completes when the application list changes, which it never does
+        // here; CancelNotify ends it.
+        std::unique_ptr<service::ipc_context> list_change_notify_;
+
+        void fetch_s60v2(service::ipc_context *ctx);
+        void init_app_list_s60v2(service::ipc_context &ctx, const app_filter_method method, const std::uint32_t embed_mask);
+        bool matches_current_filter(apa_app_registry &reg);
 
     public:
         explicit applist_session(service::typical_server *svr, kernel::uid client_ss_uid, epoc::version client_ver);
@@ -308,12 +321,21 @@ namespace eka2l1 {
         void app_info_provided_by_reg_file(service::ipc_context &ctx);
 
         void launch_app(service::ipc_context &ctx);
+        // Symbian 7.0s: StartApp(const CApaCommandLine&[, TThreadId&]) sends FullCommandLine() as arg 0
+        // and, only for the second form, a TPckg<TThreadId> as arg 1.
+        void launch_app_s60v2(service::ipc_context &ctx, const bool return_thread_id);
+        // Symbian 7.0s StartDocument/CreateDocument(const TDesC& aFileName, TUid aAppUid, TThreadId&):
+        // TIpcArgs(&aFileName, aAppUid, &TPckg<TThreadId>); the launch type is not sent.
+        void start_document_by_uid_s60v2(service::ipc_context &ctx, const bool create);
+        void embed_count(service::ipc_context &ctx);
         void is_program(service::ipc_context &ctx);
         void get_preferred_buf_size(service::ipc_context &ctx);
         void get_app_for_document(service::ipc_context &ctx);
         void get_app_for_data_type(service::ipc_context &ctx);
         void get_app_for_document_by_file_handle(service::ipc_context &ctx);
-        void get_app_for_document_impl(service::ipc_context &ctx, const std::u16string &path);
+        void get_app_for_document_impl(service::ipc_context &ctx, const std::u16string &path, const int result_arg = 0);
+        // Symbian 7.0s AppForDocument(const TDesC&, TUid&, TDataType&): TIpcArgs(&aFileName, &TPckg<SReturnData_AppForDocument>).
+        void get_app_for_document_s60v2(service::ipc_context &ctx);
         void get_app_executable_name_given_app_uid(service::ipc_context &ctx);
         void recognize_data(service::ipc_context &ctx);
         void recognize_data_by_file_handle(service::ipc_context &ctx);
@@ -357,6 +379,8 @@ namespace eka2l1 {
 
         // Exact dimensions win; otherwise choose the nearest area that does not exceed the request.
         std::optional<apa_app_masked_icon_bitmap> get_icon_by_size(apa_app_registry &registry, const eka2l1::vec2 &size);
+        // Index of the icon/mask pair that answers a request for an icon of this size (see get_app_icon).
+        std::size_t pick_icon_pair_by_size(apa_app_registry &registry, const eka2l1::vec2 &size);
         std::optional<apa_app_masked_icon_bitmap> get_list_icon(apa_app_registry &registry);
 
         std::mutex list_access_mut_;

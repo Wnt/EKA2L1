@@ -76,6 +76,10 @@ namespace eka2l1::epoc {
         std::size_t uid_owner_change_callback_handle;
 
         kernel::process *uid_owner_change_process;
+        // The same process by its kernel id. It can die before this group does -
+        // an application started by another outlives its starter - and then the
+        // pointer above is freed memory; the id says whether it is still there.
+        kernel::uid uid_owner_change_process_id;
         ws::uid screen_change_event_handle;
 
         bool can_receive_focus() {

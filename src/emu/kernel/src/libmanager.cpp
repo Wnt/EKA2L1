@@ -1179,7 +1179,44 @@ namespace eka2l1::hle {
         auto res = svc_funcs_.find(svcnum);
 
         if (res == svc_funcs_.end()) {
-            LOG_ERROR(KERNEL, "Unimplement system call: 0x{:X}!", svcnum);
+            // Name the caller: the four argument registers and the export the call came from are
+            // usually enough to tell which executive call an unknown number is.
+            arm::core *cpu = kern_->get_cpu();
+            kernel::process *pr = kern_->crr_process();
+            kernel::thread *thr = kern_->crr_thread();
+            const address lr = cpu->get_lr();
+            std::string where = "?";
+
+            for (const auto &seg_obj : kern_->get_codeseg_list()) {
+                codeseg_ptr seg = reinterpret_cast<codeseg_ptr>(seg_obj.get());
+                if (!seg || !pr) {
+                    continue;
+                }
+
+                const address beg = seg->get_code_run_addr(pr);
+                if ((lr < beg) || (lr >= beg + seg->get_text_size())) {
+                    continue;
+                }
+
+                std::uint32_t best_ord = 0;
+                address best_addr = 0;
+                const std::vector<std::uint32_t> exports = seg->get_export_table(pr);
+
+                for (std::size_t i = 0; i < exports.size(); i++) {
+                    const address ex = exports[i] & ~1u;
+                    if ((ex <= lr) && (ex >= best_addr)) {
+                        best_addr = ex;
+                        best_ord = static_cast<std::uint32_t>(i + 1);
+                    }
+                }
+
+                where = fmt::format("{}+0x{:X} ord {}+0x{:X}", seg->name(), lr - beg, best_ord, lr - best_addr);
+                break;
+            }
+
+            LOG_ERROR(KERNEL, "Unimplement system call: 0x{:X}! thread {} r0=0x{:X} r1=0x{:X} r2=0x{:X} r3=0x{:X} lr=0x{:X} ({})",
+                svcnum, thr ? thr->name() : std::string("?"), cpu->get_reg(0), cpu->get_reg(1), cpu->get_reg(2), cpu->get_reg(3),
+                lr, where);
 
             kern_->unlock();
             return false;

@@ -166,17 +166,35 @@ namespace eka2l1::epoc {
                     extra_event.key_evt_.modifiers = event_modifier_repeatable;
             }
 
-            evt.handle = focus->get_client_handle();
-            extra_event.handle = focus->get_client_handle();
+            // A captured key goes to the winning capturer instead of the focus: CaptureKey requests are
+            // keyed by key code and win the translated key event, CaptureKeyUpAndDowns requests are keyed
+            // by scan code and win the up/down events. (The raw event's own code field is always 0, so
+            // it must not be the lookup key.)
+            auto target_for = [&](const std::uint32_t code, const epoc::event_key_capture_type type) -> epoc::window * {
+                auto found = serv_->key_capture_requests.find(code);
+
+                if (found == serv_->key_capture_requests.end()) {
+                    return focus;
+                }
+
+                const epoc::event_capture_key_notifier *capture = find_key_capture(found->second, type, evt.key_evt_.modifiers);
+                return capture ? capture->user : focus;
+            };
+
+            epoc::window *raw_target = target_for(static_cast<std::uint32_t>(evt.key_evt_.scancode), epoc::event_key_capture_type::up_and_downs);
+            epoc::window *key_target = target_for(the_code, epoc::event_key_capture_type::normal);
+
+            evt.handle = raw_target->get_client_handle();
+            extra_event.handle = key_target->get_client_handle();
 
             kern->lock();
-            focus->queue_event(evt);
+            raw_target->queue_event(evt);
             kern->unlock();
 
             if (!dont_send_extra_key_event) {
                 // Give it a single key event also
                 kern->lock();
-                focus->queue_event(extra_event);
+                key_target->queue_event(extra_event);
                 kern->unlock();
 
                 if ((evt.type == epoc::event_code::key_down) && repeatable) {
@@ -187,44 +205,11 @@ namespace eka2l1::epoc {
             if ((evt.type == epoc::event_code::key_up) && repeatable) {
                 kern->lock();
 
-                if (!timing->unschedule_event(serv_->repeatable_event_, data_for_repeatable)) {    
+                if (!timing->unschedule_event(serv_->repeatable_event_, data_for_repeatable)) {
                     serv_->cancel_repeatable_list.insert(data_for_repeatable);
                 }
 
                 kern->unlock();
-            }
-
-            // Iterates through key capture requests and deliver those in needs.key_capture_request_queue &rqueue = key_capture_requests[extra_key_evt.key_evt_.code];
-            window_server::key_capture_request_queue &rqueue = serv_->key_capture_requests[evt.key_evt_.code];
-
-            for (auto ite = rqueue.end(); ite != rqueue.begin(); ite--) {
-                // No need to deliver twice.
-                if (ite->user->id == focus->id) {
-                    break;
-                }
-
-                switch (ite->type_) {
-                case epoc::event_key_capture_type::normal:
-                    extra_event.handle = ite->user->get_client_handle();
-
-                    kern->lock();
-                    ite->user->queue_event(extra_event);
-                    kern->unlock();
-
-                    break;
-
-                case epoc::event_key_capture_type::up_and_downs:
-                    evt.handle = ite->user->get_client_handle();
-
-                    kern->lock();
-                    ite->user->queue_event(evt);
-                    kern->unlock();
-
-                    break;
-
-                default:
-                    break;
-                }
             }
         }
 

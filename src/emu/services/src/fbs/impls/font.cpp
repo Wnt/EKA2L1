@@ -606,7 +606,14 @@ namespace eka2l1 {
         // For eka1, it's always in twips for spec height.
         // I don't know why when I tested with eka2, this height starts to be in pixels for pixel opcode.
         // TODO: Find out if spec height is always in twips for eka2.
-        if (serv->kern->is_eka1() || is_twips) {
+        // Symbian OS 7.0s is the exception on EKA1: its CFbsTypefaceStore::GetNearestFontInPixels sends the
+        // caller's pixel height unconverted with its own opcode (0xd; S80 DP2.0 FBSCLI.DLL), so dividing it by
+        // the twips ratio shrank every list and table font on the Nokia 9300 to the 2-pixel minimum.
+        const bool pixel_height_from_client = (serv->kern->get_epoc_version() == epocver::epoc7)
+            && ((ctx->msg->function == fbs_nearest_font_design_height_in_pixels)
+                || (ctx->msg->function == fbs_nearest_font_max_height_in_pixels));
+
+        if ((serv->kern->is_eka1() && !pixel_height_from_client) || is_twips) {
             spec.height = static_cast<std::int32_t>(static_cast<float>(spec.height) / epoc::get_approximate_pixel_to_twips_mul(serv->kern->get_epoc_version()));
             // Design-height requests, including the EKA1 form, do not carry
             // the max-height/device-size descriptor in slot 2.
