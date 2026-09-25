@@ -353,7 +353,9 @@ namespace eka2l1 {
             CREATE_SERVER(sys, sisregistry_server);
             CREATE_SERVER(sys, alarm_server);
 
-            if (sys->get_symbian_version_use() == epocver::epoc7) {
+            // The ROM's Eikon server hosts AlarmAlertServer itself; an HLE of that name created first
+            // would take its clients (the ROM AlarmServer) away from it.
+            if ((sys->get_symbian_version_use() == epocver::epoc7) && !rom_eiksrv) {
                 CREATE_SERVER(sys, alarm_alert_server_eka1);
             }
             CREATE_SERVER(sys, socket_server);

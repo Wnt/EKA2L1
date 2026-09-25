@@ -795,8 +795,11 @@ namespace eka2l1::epoc {
                 status->set(val, kern->is_eka1());
 
             msg->own_thr->signal_request();
-            if (kern->get_config()->log_ipc)
-                LOG_TRACE(KERNEL, "Message completed with code: {}, thread to signal: {}", val, msg->own_thr->name());
+            if (kern->get_config()->log_ipc) {
+                service::server *svr = msg->msg_session ? msg->msg_session->get_server() : nullptr;
+                LOG_TRACE(KERNEL, "Message completed with code: {}, thread to signal: {} ({} op {})", val,
+                    msg->own_thr->name(), svr ? svr->name() : "?", msg->function);
+            }
         }
 
         if (msg->thread_handle_low) {
@@ -1352,7 +1355,11 @@ namespace eka2l1::epoc {
         }
 
         if (kern->get_config()->log_ipc) {
-            LOG_TRACE(KERNEL, "Sending {} sync to {}", ord, ss->get_server()->name());
+            kernel::thread *sender = kern->crr_thread();
+            LOG_TRACE(KERNEL, "Sending {} {} to {} from {} a=[{:08x} {:08x} {:08x} {:08x}] sts=0x{:x}", ord,
+                sync ? "sync" : "async", ss->get_server()->name(), sender ? sender->name() : "?",
+                static_cast<std::uint32_t>(arg.args[0]), static_cast<std::uint32_t>(arg.args[1]),
+                static_cast<std::uint32_t>(arg.args[2]), static_cast<std::uint32_t>(arg.args[3]), status.ptr_address());
         }
 
         const std::string server_name = ss->get_server()->name();
@@ -4415,6 +4422,27 @@ namespace eka2l1::epoc {
 
         const std::string server_name_in_str = common::ucs2_to_utf8(name->to_std_string(target_process));
         kernel::owner_type handle_owner = server_name_in_str.empty() ? kernel::owner_type::process : kernel::owner_type::thread;
+
+        // A server name is unique system-wide: the kernel refuses a second one with KErrAlreadyExists,
+        // which is how two racing starts of the same server settle (the loser exits quietly). An HLE
+        // server of that name is a deliberate replacement of the ROM's, so the ROM one may coexist
+        // (clients resolve to the HLE, created first); say so, because a client of the ROM process
+        // then talks to the HLE and not to its own server.
+        if (!server_name_in_str.empty()) {
+            if (service::server *existing = kern->get_by_name<service::server>(server_name_in_str)) {
+                kernel::thread *creator = kern->crr_thread();
+                if (!existing->is_hle()) {
+                    LOG_WARN(KERNEL, "Server {} already exists (owner {}); creation by {} refused with KErrAlreadyExists",
+                        server_name_in_str, existing->get_owner_thread() ? existing->get_owner_thread()->name() : "?",
+                        creator ? creator->name() : "?");
+                    finish_status_request_eka1(target_thread, finish_signal, epoc::error_already_exists);
+                    return epoc::error_already_exists;
+                }
+
+                LOG_WARN(KERNEL, "Server name collision: guest server {} created by {} coexists with the HLE server of that name, "
+                    "which keeps resolving new clients", server_name_in_str, creator ? creator->name() : "?");
+            }
+        }
 
         // In EKA1, sessions can only be shared inside a process.
         const kernel::handle h = kern->create_and_add<service::server>(handle_owner, kern->get_system(),
