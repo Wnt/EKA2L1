@@ -73,6 +73,7 @@ namespace eka2l1::epoc {
     static constexpr std::uint32_t CLOCK_FONT_METRIC = 3;
     static constexpr std::int32_t CLOCK_FONT_DESIGN_HEIGHT = 20;
     static constexpr std::int32_t CLOCK_BOTTOM_MARGIN = 2;
+    static constexpr std::int32_t AM_PM_FONT_DESIGN_HEIGHT = 10;
     static constexpr std::int64_t SECONDS_FROM_0AD_TO_1970 = 62168256000LL;
 
     s80_status_pane::s80_status_pane(window_server *serv)
@@ -105,12 +106,20 @@ namespace eka2l1::epoc {
         return seconds;
     }
 
+    bool s80_status_pane::twelve_hour_clock() const {
+        property_ptr prop = serv_->get_kernel_system()->get_prop(epoc::SYS_CATEGORY, epoc::LOCALE_DATA_KEY);
+        std::optional<epoc::locale> loc = prop ? prop->get_pkg<epoc::locale>() : std::nullopt;
+
+        return loc && (loc->time_format_ == epoc::time_format_twelve_hours);
+    }
+
     bool s80_status_pane::clock_changed(const layout_kind kind) {
         if (kind != layout_wide) {
             return false;
         }
 
-        return (local_seconds() / 60) != shown_minute_;
+        // A new minute, or Control panel switched between the 12- and 24-hour clock.
+        return ((local_seconds() / 60) != shown_minute_) || (twelve_hour_clock() != shown_twelve_hour_);
     }
 
     fbsfont *s80_status_pane::clock_font() {
@@ -152,6 +161,33 @@ namespace eka2l1::epoc {
         return best;
     }
 
+    // The am/pm text beside a 12-hour clock is about half the digits' height on the device ("7:25 AM",
+    // User Guide p. 21): in the digits' face "7:25" and "AM" would overlap in the 60 px clock. Take the
+    // System bold face nearest to design height 10 that an application holds.
+    fbsfont *s80_status_pane::am_pm_font() {
+        fbs_server *fbss = serv_->get_fbs_server();
+        if (!fbss) {
+            return nullptr;
+        }
+
+        fbsfont *best = nullptr;
+        std::int32_t best_delta = 0x7FFFFFFF;
+
+        for (fbsfont *font : fbss->live_fonts()) {
+            if ((font->of_info.family != u"System") || !(font->of_info.face_attrib.style & epoc::open_font_face_attrib::bold)) {
+                continue;
+            }
+
+            const std::int32_t delta = std::abs(font->of_info.metrics.design_height - AM_PM_FONT_DESIGN_HEIGHT);
+            if (delta < best_delta) {
+                best = font;
+                best_delta = delta;
+            }
+        }
+
+        return best;
+    }
+
     void s80_status_pane::draw_clock(drivers::graphics_command_builder &builder, screen *scr, const common::region &visible) {
         fbsfont *font = clock_font();
         if (!font) {
@@ -161,24 +197,62 @@ namespace eka2l1::epoc {
         const std::int64_t now = local_seconds();
         shown_minute_ = now / 60;
 
+        // TTime::FormatL follows the guest's TLocale: the 12-hour clock and where the am/pm text goes.
+        clock_time_locale time_locale;
+        {
+            property_ptr prop = serv_->get_kernel_system()->get_prop(epoc::SYS_CATEGORY, epoc::LOCALE_DATA_KEY);
+            std::optional<epoc::locale> loc = prop ? prop->get_pkg<epoc::locale>() : std::nullopt;
+
+            if (loc) {
+                time_locale.twelve_hour_ = (loc->time_format_ == epoc::time_format_twelve_hours);
+                time_locale.am_pm_before_ = (loc->am_pm_symbol_position_ == epoc::locale_before);
+                time_locale.am_pm_space_ = (loc->am_pm_space_between_ != 0);
+            }
+
+            // The 9300's English ELOCL.DLL spells them in capitals.
+            time_locale.am_ = u"AM";
+            time_locale.pm_ = u"PM";
+        }
+
+        shown_twelve_hour_ = time_locale.twelve_hour_;
+
         struct section_def {
             const char16_t *format;
             epoc::text_alignment alignment;
+            bool am_pm;
         };
 
         static const section_def sections[] = {
-            { u"%-B", epoc::text_alignment::left },
-            { u"%J%:1%T", epoc::text_alignment::center },
-            { u"%+B", epoc::text_alignment::right }
+            { u"%-B", epoc::text_alignment::left, true },
+            { u"%J%:1%T", epoc::text_alignment::center, false },
+            { u"%+B", epoc::text_alignment::right, true }
         };
 
         const std::int32_t baseline = CLOCK_RECT.top.y + CLOCK_RECT.size.y - CLOCK_BOTTOM_MARGIN;
         gdi_store_command_segment segment;
 
         for (const section_def &section : sections) {
-            const std::u16string text = clock_format_time(section.format, now);
+            std::u16string text = clock_format_time(section.format, now, 0, time_locale);
+
+            // The section's own alignment places the text; the space FormatL puts between it and the time
+            // would only push it off its edge.
+            while (!text.empty() && (text.front() == u' ')) {
+                text.erase(text.begin());
+            }
+
+            while (!text.empty() && (text.back() == u' ')) {
+                text.pop_back();
+            }
+
             if (text.empty()) {
                 continue;
+            }
+
+            fbsfont *section_font = font;
+            if (section.am_pm) {
+                if (fbsfont *small = am_pm_font()) {
+                    section_font = small;
+                }
             }
 
             gdi_store_command command;
@@ -190,7 +264,7 @@ namespace eka2l1::epoc {
 
             data.alignment_ = static_cast<std::uint32_t>(section.alignment);
             data.text_box_ = eka2l1::rect(eka2l1::vec2(CLOCK_RECT.top.x, baseline), CLOCK_RECT.size);
-            data.fbs_font_ptr_ = font;
+            data.fbs_font_ptr_ = section_font;
             data.color_ = eka2l1::vec4(255, 255, 255, 255);
 
             segment.add_command(command);

@@ -30,6 +30,8 @@
 #include <services/fbs/bitmap.h>
 
 #include <array>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace eka2l1 {
     class kernel_system;
@@ -70,6 +72,17 @@ namespace eka2l1::epoc {
         drivers::graphics_driver *driver;
 
         std::int64_t last_free{ 0 };
+
+        // Textures the redraw store still draws. The store keeps a window's drawing and replays it on
+        // every recomposition, but a bitmap is a live object: an application's off-screen bitmap is drawn
+        // into again and blitted elsewhere (S80 list boxes and dialogs share one to paint a highlighted
+        // row). WSERV copied the pixels at blit time; the store must replay what was blitted then, so a
+        // texture a stored command holds is never overwritten: new content gets a new texture, and the
+        // old one is destroyed when the last stored command using it goes.
+        std::unordered_map<drivers::handle, std::uint32_t> store_refs_;
+        std::unordered_set<drivers::handle> orphans_;
+
+        bool held_by_store(const drivers::handle h) const;
 
     protected:
         std::uint64_t hash_bitwise_bitmap(epoc::bitwise_bitmap *bw_bmp);
@@ -112,6 +125,25 @@ namespace eka2l1::epoc {
          *          purged from cache
          */
         bool remove(epoc::bitwise_bitmap *bmp);
+
+        /**
+         * @brief   A stored draw command now uses this texture: it keeps its content until released.
+         */
+        void retain(const drivers::handle h);
+
+        /**
+         * @brief   A stored draw command using this texture is gone. The last release of a texture the
+         *          cache has already replaced for its bitmap destroys it.
+         */
+        void release(const drivers::handle h);
+
+        std::size_t store_held_count() const {
+            return store_refs_.size();
+        }
+
+        std::size_t orphan_count() const {
+            return orphans_.size();
+        }
 
         void clean(drivers::graphics_driver *drv);
     };

@@ -239,6 +239,12 @@ namespace eka2l1 {
 
         drive_name.back() += static_cast<char>(drv - drive_a);
 
+        if (ctx->sys->is_s80_device_active()) {
+            // The Series 80 File manager shows a drive's volume name as it is ("EKA2L1_D"); the device's
+            // own drives carry none, and the File manager names them itself (Communicator, Memory card).
+            drive_name.clear();
+        }
+
 #define VOLUME_INFO_GETTERS(info_name)                                                \
     LOG_WARN(SERVICE_EFSRV, "Volume size stubbed with 1GB");                          \
     fill_drive_info(reinterpret_cast<epoc::fs::drive_info_v1 *>(&info_name.drv_info), \
