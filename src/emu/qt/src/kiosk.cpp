@@ -711,10 +711,30 @@ namespace eka2l1::desktop {
 
     control_server::control_server(emulator &state)
         : state_(state)
-        , server_(new QLocalServer()) {
+        , server_(new QLocalServer())
+        , input_timer_(new QTimer(server_)) {
+        input_timer_->setSingleShot(true);
+        QObject::connect(input_timer_, &QTimer::timeout, server_, [this]() {
+            if (input_commands_.empty()) return;
+            auto command = std::move(input_commands_.front());
+            input_commands_.pop_front();
+            command();
+            input_timer_->start(30);
+        });
         QObject::connect(server_, &QLocalServer::newConnection, server_, [this]() {
             on_new_connection();
         });
+    }
+
+    void control_server::enqueue_input(std::function<void()> command) {
+        // The ARM wserv has a small per-client queue. Give the app a turn between
+        // synthetic characters, as a physical keyboard does. Do not purge raw edges.
+        if (input_commands_.empty() && !input_timer_->isActive()) {
+            command();
+            input_timer_->start(30);
+        } else {
+            input_commands_.push_back(std::move(command));
+        }
     }
 
     control_server::~control_server() {
@@ -861,9 +881,10 @@ namespace eka2l1::desktop {
         }
 
         if (verb == "key" || verb == "type") {
-            const std::lock_guard<std::timed_mutex> guard(state_.lockdown);
             if (!state_.winserv) return "ERR no window server";
-            auto edge = [&](std::uint32_t code, std::uint32_t text, bool down) {
+            if (input_commands_.size() + arg.size() > 65536) return "ERR input queue full";
+            auto edge = [this](std::uint32_t code, std::uint32_t text, bool down) {
+                if (!state_.winserv) return;
                 drivers::input_event event{};
                 event.type_ = drivers::input_event_type::key;
                 event.key_.code_ = code;
@@ -875,10 +896,13 @@ namespace eka2l1::desktop {
                 const auto chars = QString::fromUtf8(arg.data(), static_cast<int>(arg.size())).toUcs4();
                 for (auto ch : chars) {
                     const auto key = static_cast<std::uint32_t>(QChar::toUpper(ch));
-                    edge(key, ch, true);
-                    edge(key, ch, false);
+                    enqueue_input([this, edge, key, ch]() {
+                        const std::lock_guard<std::timed_mutex> guard(state_.lockdown);
+                        edge(key, ch, true);
+                        edge(key, ch, false);
+                    });
                 }
-                return "OK typed " + std::to_string(chars.size());
+                return "OK queued " + std::to_string(chars.size());
             }
             std::istringstream words(arg);
             std::string name, action, extra;
@@ -906,9 +930,12 @@ namespace eka2l1::desktop {
                 // key is a physical key; type supplies Unicode text and modifiers.
                 code = QChar::toUpper(chars[0]);
             }
-            if (action != "up") edge(code, text, true);
-            if (action != "down") edge(code, text, false);
-            return "OK key";
+            enqueue_input([this, edge, code, text, action]() {
+                const std::lock_guard<std::timed_mutex> guard(state_.lockdown);
+                if (action != "up") edge(code, text, true);
+                if (action != "down") edge(code, text, false);
+            });
+            return "OK queued key";
         }
 
         if (verb == "apps") {
@@ -1047,6 +1074,8 @@ namespace eka2l1::desktop {
         }
 
         if (verb == "reset") {
+            input_timer_->stop();
+            input_commands_.clear();
             if (!state_.ui_main) {
                 return "ERR no window";
             }
@@ -1059,6 +1088,8 @@ namespace eka2l1::desktop {
         }
 
         if (verb == "quit") {
+            input_timer_->stop();
+            input_commands_.clear();
             quit_after = true;
             return "OK bye";
         }

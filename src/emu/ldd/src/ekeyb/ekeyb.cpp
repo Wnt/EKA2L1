@@ -54,13 +54,14 @@ namespace eka2l1::ldd {
         const eka2l1::ptr<void> arg2) {
         if (kern->rom_raw_input_enabled()) {
             LOG_INFO(LDD_MMCIF, "ROM EKeyb control {} arg1=0x{:X} arg2=0x{:X}", n, arg1.ptr_address(), arg2.ptr_address());
-            // ROM HAL 0x5004341c: 0/2 mouse speed/acceleration, 5 case
-            // state, 6 keyboard layout index; all getters take TInt* in arg1.
+            // ROM HAL jump table at 0x500434c8: control 0 = case state,
+            // 2 = keyboard index (HAL 69), 5/6 = mouse speed/acceleration.
+            // All getters take TInt* in arg1.
             auto *value = reinterpret_cast<std::int32_t *>(arg1.get(r->owning_process()));
             if (n == 0 || n == 2 || n == 5 || n == 6) {
                 if (!value) return epoc::error_argument;
-                if (n == 6) *value = sys_->get_config()->keyboard_layout_index;
-                else if (n == 5) *value = 0; // RAE-6 HAL default case state
+                if (n == 2) *value = sys_->get_config()->keyboard_layout_index;
+                else if (n == 0) *value = 0; // RAE-6 HAL default case state
                 else *value = 1; // RAE-6 HAL defaults for mouse speed/acceleration
                 return epoc::error_none;
             }
