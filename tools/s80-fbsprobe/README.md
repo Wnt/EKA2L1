@@ -47,3 +47,12 @@ so a successful direct-panel test alone does not diagnose a sharing defect.
 Add `aa` to the guest argument (for example `window aa`) to explicitly request
 antialiased glyphs. Actual returned bitmap types and metrics are logged; bitmap
 fonts may still return monochrome. Default requests leave the choice to ROM FBS.
+
+The probe also reads `CFbsTypefaceStore::DefaultBitmapType()` without changing it,
+and logs each requested bitmap type plus `TOpenFontMetrics`. This distinguishes a
+font-store policy from a rasterizer that cannot produce antialiased glyphs.
+In the RAE-6 ROM, FNTSTR's CFontStore constructor at 0x502ccd64 writes 1
+(EMonochromeGlyphBitmap) to its +0xc8 default field at 0x502cce54–0x502cce5c.
+GetNearestFontInPixels(TOpenFontSpec), 0x502cde40–0x502cde4c, substitutes that
+field only when the requested bitmap type is 0 (EDefaultGlyphBitmap).
+The CFbsTypefaceStore getter uses FBS opcode 31; its setter uses opcode 30.

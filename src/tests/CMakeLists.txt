@@ -12,6 +12,8 @@ add_executable(ekatests
 
 target_link_libraries(ekatests PRIVATE
     Catch2
+    freetype
+    stb
     common
     config
     epoc
@@ -70,3 +72,7 @@ set(SYSTEM_ASSETS_PATH "${CMAKE_CURRENT_SOURCE_DIR}/epoc/system/assets/")
 add_assets(ekatests ${SYSTEM_ASSETS_PATH} "systemassets")
 
 add_assets(ekatests "${CMAKE_CURRENT_SOURCE_DIR}/epoc/services/internet/tlsassets/" "tlsassets")
+
+# Use the existing redistributable frontend font for adapter metric contracts.
+configure_file("${PROJECT_SOURCE_DIR}/src/emu/qt/resources/overlay_font.ttf"
+    "${CMAKE_CURRENT_BINARY_DIR}/fontassets/overlay_font.ttf" COPYONLY)

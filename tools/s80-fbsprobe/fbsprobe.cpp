@@ -8,6 +8,7 @@
 #include <bitstd.h>
 #include <w32std.h>
 #include <f32file.h>
+#include <openfont.h>
 
 LOCAL_C void ConnectFbsL() {
     TInt err = RFbsSession::Connect();
@@ -49,6 +50,13 @@ LOCAL_C void RunL() {
     User::LeaveIfError(ws.Connect());
     ws.Flush(); // Let Wserv initialize its screen before the direct-screen probe.
     CFbsScreenDevice* screen = CFbsScreenDevice::NewL(_L(""), EColor64K);
+    CFbsTypefaceStore* store = CFbsTypefaceStore::NewL(screen);
+    const TGlyphBitmapType defaultBitmapType = store->DefaultBitmapType();
+    RDebug::Print(_L("FBSPROBE font store default bitmap=%d"), defaultBitmapType);
+    if (defaultBitmapType != EMonochromeGlyphBitmap && defaultBitmapType != EAntiAliasedGlyphBitmap)
+        User::Leave(KErrCorrupt);
+    RDebug::Print(_L("FBSPROBE default bitmap enum contract PASS"));
+    delete store;
     CFbsBitmap canvas;
     User::LeaveIfError(canvas.Create(TSize(640,200), EColor64K));
     const TSize initialTwips = canvas.SizeInTwips();
@@ -67,10 +75,15 @@ LOCAL_C void RunL() {
         TFontSpec spec(names[i], 18);
         if (i==2) spec.iFontStyle.SetStrokeWeight(EStrokeWeightBold);
         if (antialiased) spec.iFontStyle.SetBitmapType(EAntiAliasedGlyphBitmap);
+        RDebug::Print(_L("FBSPROBE requested bitmap=%d"), spec.iFontStyle.BitmapType());
         CFont* font = 0;
         User::LeaveIfError(screen->GetNearestFontInPixels(font, spec));
         RDebug::Print(_L("FBSPROBE font %d height=%d ascent=%d width=%d"), i,
             font->HeightInPixels(), font->AscentInPixels(), font->TextWidthInPixels(_L("Hello museum 9300")));
+        TOpenFontMetrics metrics;
+        if (static_cast<CFbsFont*>(font)->GetFontMetrics(metrics))
+            RDebug::Print(_L("FBSPROBE metrics size=%d ascent=%d descent=%d maxHeight=%d maxDepth=%d"),
+                metrics.Size(), metrics.Ascent(), metrics.Descent(), metrics.MaxHeight(), metrics.MaxDepth());
         TFontSpec actual = font->FontSpecInTwips();
         RDebug::Print(_L("FBSPROBE actual %S heightTwips=%d bold=%d bitmap=%d"),
             &actual.iTypeface.iName, actual.iHeight, actual.iFontStyle.StrokeWeight(), actual.iFontStyle.BitmapType());
