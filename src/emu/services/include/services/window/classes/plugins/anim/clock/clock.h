@@ -241,10 +241,24 @@ namespace eka2l1::epoc {
     };
 
     /**
-     * \brief TTime::FormatL for the format strings of digital clocks, with a 24-hour English locale.
+     * \brief TTime::FormatL for the format strings of digital clocks, under the given locale (default: 24-hour English).
      *
      * \param format        The format, a TTime::FormatL string plus the flashing block delimiter (char 1).
      * \param local_seconds Local time, in seconds since 1970.
      */
-    std::u16string clock_format_time(const std::u16string &format, const std::int64_t local_seconds, const std::uint32_t microseconds = 0);
+    /**
+     * @brief The TLocale settings TTime::FormatL takes its hour and am/pm text from.
+     *
+     * The default is the English locale: 24-hour clock, am/pm after the time with a space.
+     */
+    struct clock_time_locale {
+        bool twelve_hour_ = false;
+        bool am_pm_before_ = false;
+        bool am_pm_space_ = true;
+        std::u16string am_ = u"am";
+        std::u16string pm_ = u"pm";
+    };
+
+    std::u16string clock_format_time(const std::u16string &format, const std::int64_t local_seconds, const std::uint32_t microseconds = 0,
+        const clock_time_locale &locale = clock_time_locale());
 }

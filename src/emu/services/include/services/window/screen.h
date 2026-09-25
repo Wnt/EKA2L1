@@ -64,6 +64,7 @@ namespace eka2l1::epoc {
     struct window_group;
     struct screen;
     class s80_status_pane;
+    class s80_note;
     struct anim_executor;
 
     enum focus_change_property {
@@ -154,6 +155,9 @@ namespace eka2l1::epoc {
         epoc::window_group *status_pane_anchor = nullptr;
         int status_pane_kind = 0;
         common::region status_pane_region;
+
+        // The Series 80 system note (HLE notifier), drawn over every window while it is up.
+        s80_note *note = nullptr;
 
         enum {
             FLAG_NEED_RECALC_VISIBLE = 1 << 0,

@@ -20,6 +20,7 @@
 
 #include <services/notifier/notifier.h>
 #include <services/notifier/queries.h>
+#include <services/window/window.h>
 #include <drivers/ui/input_dialog.h>
 #include <system/epoc.h>
 
@@ -190,8 +191,7 @@ namespace eka2l1 {
         const std::weak_ptr<epoc::notify_info> pending = pending_dialog_;
         kernel_system *kern = ctx->sys->get_kernel_system();
         const kernel::uid requester_id = ctx->msg->own_thr->unique_id();
-        drivers::ui::show_yes_no_dialog(line1 + u'\n' + line2, button_text1, button_text2,
-            [kern, pending, requester_id, result_address](int value) {
+        auto on_answer = [kern, pending, requester_id, result_address](int value) {
                 if (pending.expired()) {
                     return;
                 }
@@ -211,7 +211,20 @@ namespace eka2l1 {
                 }
                 result->assign(process, reinterpret_cast<const std::uint8_t *>(&value), sizeof(value));
                 completion->complete(epoc::error_none);
-            });
+            };
+
+        // Series 80 with the HLE Eikon server: the note is the guest's, drawn by the window server over the
+        // screen as the ROM Eikon server's notifier would, and answered with the device's keys.
+        if (ctx->sys->is_s80_device_active()) {
+            window_server *winserv = reinterpret_cast<window_server *>(kern->get_by_name<service::server>(
+                eka2l1::get_winserv_name_by_epocver(ctx->sys->get_symbian_version_use())));
+
+            if (winserv && winserv->s80_show_note(line1, line2, button_text1, button_text2, on_answer)) {
+                return;
+            }
+        }
+
+        drivers::ui::show_yes_no_dialog(line1 + u'\n' + line2, button_text1, button_text2, on_answer);
     }
 
     void notifier_client_session::fetch(service::ipc_context *ctx) {

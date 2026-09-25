@@ -223,3 +223,29 @@ TEST_CASE("Clock anim formats time like TTime::FormatL with a 24-hour English lo
     REQUIRE(epoc::clock_format_time(u"%*I%:1%T", when + 3600) == u"1:57");
     REQUIRE(epoc::clock_format_time(u"12\x01:\x01" u"57", when) == u"12:57");
 }
+
+TEST_CASE("Clock anim follows a 12-hour locale and its am/pm position", "[window][clock]") {
+    // Tuesday 16 November 2004, 07:25:08 and 19:25:08
+    const std::int64_t morning = 1100589908;
+    const std::int64_t evening = morning + 12 * 3600;
+
+    epoc::clock_time_locale twelve;
+    twelve.twelve_hour_ = true;
+    twelve.am_ = u"AM";
+    twelve.pm_ = u"PM";
+
+    // The status pane's three sections (ROM anim trace): the hour has no leading zero on a 12-hour clock.
+    REQUIRE(epoc::clock_format_time(u"%J%:1%T", morning, 0, twelve) == u"7:25");
+    REQUIRE(epoc::clock_format_time(u"%J%:1%T", evening, 0, twelve) == u"7:25");
+    REQUIRE(epoc::clock_format_time(u"%-B", morning, 0, twelve) == u"");
+    REQUIRE(epoc::clock_format_time(u"%+B", morning, 0, twelve) == u" AM");
+    REQUIRE(epoc::clock_format_time(u"%+B", evening, 0, twelve) == u" PM");
+    REQUIRE(epoc::clock_format_time(u"%-B%:0%J%:1%T%:3%+B", evening, 0, twelve) == u"7:25 PM");
+
+    epoc::clock_time_locale before = twelve;
+    before.am_pm_before_ = true;
+    REQUIRE(epoc::clock_format_time(u"%-B%:0%J%:1%T%:3%+B", morning, 0, before) == u"AM 7:25");
+
+    // The 24-hour clock is untouched by the am/pm settings.
+    REQUIRE(epoc::clock_format_time(u"%-B%:0%J%:1%T%:3%+B", morning) == u"07:25");
+}

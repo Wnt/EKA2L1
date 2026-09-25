@@ -31,6 +31,7 @@
 #include <utils/bafl.h>
 #include <utils/err.h>
 
+#include <cstring>
 #include <string>
 
 #include <fmt/format.h>
@@ -1234,5 +1235,44 @@ namespace eka2l1::epoc::msv {
         }
 
         return true;
+    }
+
+    void fill_entry_data(const entry &ent, entry_data &data) {
+        data = entry_data{};
+
+        data.id_ = ent.id_;
+        data.parent_id_ = static_cast<std::uint32_t>(ent.parent_id_);
+        data.data_ = ent.data_;
+        data.pc_sync_count_ = ent.pc_sync_count_;
+        data.reserved_ = ent.reserved_;
+        data.service_id_ = ent.service_id_;
+        data.related_id_ = ent.related_id_;
+        data.type_uid_ = ent.type_uid_;
+        data.mtm_uid_ = ent.mtm_uid_;
+        data.date_ = ent.time_;
+        data.size_ = ent.size_;
+        data.error_ = ent.error_;
+        data.bio_type_ = ent.bio_type_;
+        std::memcpy(data.mtm_datas_, ent.mtm_datas_, sizeof(data.mtm_datas_));
+
+        data.description_.set_length(nullptr, static_cast<std::uint32_t>(ent.description_.length()));
+        data.details_.set_length(nullptr, static_cast<std::uint32_t>(ent.details_.length()));
+    }
+
+    void apply_entry_data(const entry_data &data, entry &ent) {
+        ent.id_ = data.id_;
+        ent.parent_id_ = static_cast<std::int32_t>(data.parent_id_);
+        ent.data_ = data.data_;
+        ent.pc_sync_count_ = data.pc_sync_count_;
+        ent.reserved_ = data.reserved_;
+        ent.service_id_ = data.service_id_;
+        ent.related_id_ = data.related_id_;
+        ent.type_uid_ = data.type_uid_;
+        ent.mtm_uid_ = data.mtm_uid_;
+        ent.time_ = data.date_;
+        ent.size_ = data.size_;
+        ent.error_ = data.error_;
+        ent.bio_type_ = data.bio_type_;
+        std::memcpy(ent.mtm_datas_, data.mtm_datas_, sizeof(ent.mtm_datas_));
     }
 }

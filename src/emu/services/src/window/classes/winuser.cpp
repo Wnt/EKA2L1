@@ -45,6 +45,30 @@
 #include <utils/err.h>
 
 namespace eka2l1::epoc {
+    // Diagnostic (env EKA2L1_WS_SEG_TRACE): log the redraw store's segments, the window extents and the
+    // commands recorded into them, to tell which window put a stray pixel on the screen and when.
+    static bool seg_trace_enabled() {
+        static const bool on = std::getenv("EKA2L1_WS_SEG_TRACE") != nullptr;
+        return on;
+    }
+
+    static void seg_trace_command(const std::uint32_t id, gdi_store_command &command) {
+        if (command.opcode_ == gdi_store_command_set_clip_rect_single) {
+            const auto &r = command.get_data_struct<gdi_store_command_set_clip_rect_single_data>().clipping_rect_;
+            LOG_WARN(SERVICE_WINDOW, "SEGTRACE win 0x{:X} cmd clip ({},{} {}x{})", id, r.top.x, r.top.y, r.size.x, r.size.y);
+        } else if (command.opcode_ == gdi_store_command_draw_rect) {
+            const auto &r = command.get_data_struct<gdi_store_command_draw_rect_data>().rect_;
+            LOG_WARN(SERVICE_WINDOW, "SEGTRACE win 0x{:X} cmd rect ({},{} {}x{})", id, r.top.x, r.top.y, r.size.x, r.size.y);
+        } else if (command.opcode_ == gdi_store_command_draw_bitmap) {
+            const auto &b = command.get_data_struct<gdi_store_command_draw_bitmap_data>();
+            LOG_WARN(SERVICE_WINDOW, "SEGTRACE win 0x{:X} cmd bitmap main={} drv={} mask={} mdrv={} dest ({},{} {}x{}) src ({},{} {}x{})", id,
+                b.main_fbs_bitmap_, b.main_drv_, b.mask_fbs_bitmap_, b.mask_drv_, b.dest_rect_.top.x, b.dest_rect_.top.y, b.dest_rect_.size.x,
+                b.dest_rect_.size.y, b.source_rect_.top.x, b.source_rect_.top.y, b.source_rect_.size.x, b.source_rect_.size.y);
+        } else {
+            LOG_WARN(SERVICE_WINDOW, "SEGTRACE win 0x{:X} cmd op {}", id, static_cast<int>(command.opcode_));
+        }
+    }
+
     static constexpr std::uint8_t bits_per_ordpos = 4;
     static constexpr std::uint8_t max_ordpos_pri = 0b1111;
     static constexpr std::uint8_t max_pri_level = (sizeof(std::uint32_t) / bits_per_ordpos) - 1;
@@ -333,7 +357,7 @@ namespace eka2l1::epoc {
             }
         }
 
-        pending_segment_->add_command(command);
+        pending_segment_->add_command(command, (command.opcode_ == gdi_store_command_draw_bitmap) ? client->get_ws().get_bitmap_cache() : nullptr);
     }
 
     bool canvas_base::can_be_physically_seen() const {
@@ -477,6 +501,10 @@ namespace eka2l1::epoc {
         }
 
         pos = top;
+        if (seg_trace_enabled()) {
+            LOG_WARN(SERVICE_WINDOW, "SEGTRACE win 0x{:X} extent abs ({},{} {}x{}) parent-rel ({},{}) visible={} active={}", id, abs_rect.top.x, abs_rect.top.y,
+                abs_rect.size.x, abs_rect.size.y, top.x, top.y, is_visible(), (flags & flags_active) != 0);
+        }
 
         if (pos_changed) {
             // Change the absolute position of children too!
@@ -512,6 +540,9 @@ namespace eka2l1::epoc {
         }
 
         flags &= ~flags_visible;
+        if (seg_trace_enabled()) {
+            LOG_WARN(SERVICE_WINDOW, "SEGTRACE win 0x{:X} set_visible {} abs ({},{} {}x{})", id, vis, abs_rect.top.x, abs_rect.top.y, abs_rect.size.x, abs_rect.size.y);
+        }
 
         if (vis) {
             flags |= flags_visible;
@@ -672,6 +703,9 @@ namespace eka2l1::epoc {
     }
 
     void canvas_base::destroy(service::ipc_context &context, ws_cmd &cmd) {
+        if (seg_trace_enabled()) {
+            LOG_WARN(SERVICE_WINDOW, "SEGTRACE win 0x{:X} destroy", id);
+        }
         // Try to redraw the screen
         on_command_batch_done(context);
 
@@ -756,6 +790,9 @@ namespace eka2l1::epoc {
 
     void canvas_base::activate(service::ipc_context &context, ws_cmd &cmd) {
         flags |= flags_active;
+        if (seg_trace_enabled()) {
+            LOG_WARN(SERVICE_WINDOW, "SEGTRACE win 0x{:X} activate abs ({},{} {}x{}) visible={}", id, abs_rect.top.x, abs_rect.top.y, abs_rect.size.x, abs_rect.size.y, is_visible());
+        }
         on_activate();
 
         if (is_visible()) {
@@ -1390,6 +1427,9 @@ namespace eka2l1::epoc {
     void redraw_msg_canvas::end_redraw(service::ipc_context &ctx, ws_cmd &cmd) {
         redraw_rect_curr.make_empty();
         redraw_segments_.promote_last_segment();
+        if (seg_trace_enabled()) {
+            LOG_WARN(SERVICE_WINDOW, "SEGTRACE win 0x{:X} end_redraw segs={}", id, redraw_segments_.get_segments().size());
+        }
 
         if (content_changed()) {
             // Newly completed redraw content must be composited in correct z-order:
@@ -1436,6 +1476,10 @@ namespace eka2l1::epoc {
         // remove all pending redraws. End redraw will report invalidates later
         client->remove_redraws(this);
         redraw_segments_.add_new_segment(redraw_rect_curr, epoc::gdi_store_command_segment_pending_redraw);
+        if (seg_trace_enabled()) {
+            LOG_WARN(SERVICE_WINDOW, "SEGTRACE win 0x{:X} begin_redraw ({},{} {}x{}) segs={}", id, redraw_rect_curr.top.x, redraw_rect_curr.top.y,
+                redraw_rect_curr.size.x, redraw_rect_curr.size.y, redraw_segments_.get_segments().size());
+        }
 
         if (surface_ui_) {
             gdi_store_command clear;
@@ -1486,6 +1530,9 @@ namespace eka2l1::epoc {
             // Not in redraw? Try to cleanup non redraw segments to make ways
             const std::size_t segment_count_before = redraw_segments_.get_segments().size();
             if (redraw_segments_.clean_old_nonredraw_segments()) {
+                if (seg_trace_enabled()) {
+                    LOG_WARN(SERVICE_WINDOW, "SEGTRACE win 0x{:X} clean_old_nonredraw {} -> {} segs", id, segment_count_before, redraw_segments_.get_segments().size());
+                }
                 // Dropping a segment loses its pixels on the next recomposite, so the client has to paint them
                 // again. Without redraw storing (Symbian OS 7.0s and older) that is only needed when a segment
                 // really went: WSERV would still hold those pixels on the screen. Not asking for the redraw
@@ -1502,6 +1549,9 @@ namespace eka2l1::epoc {
                 // Create a new non redraw segment, covers the entire screen
                 redraw_segments_.add_new_segment(full_size_rect, gdi_store_command_segment_non_redraw);
                 created_non_redraw_segment = true;
+                if (seg_trace_enabled()) {
+                    LOG_WARN(SERVICE_WINDOW, "SEGTRACE win 0x{:X} new non_redraw segment, segs={}", id, redraw_segments_.get_segments().size());
+                }
             }
         }
 
@@ -1514,14 +1564,28 @@ namespace eka2l1::epoc {
             content_changed(true);
         }
 
+        epoc::bitmap_cache *bcache = client->get_ws().get_bitmap_cache();
+        const bool is_blit = (command.opcode_ == gdi_store_command_draw_bitmap);
+
+        if (is_blit) {
+            // Resolve the bitmap's texture now, so the stored command keeps what is blitted at this moment
+            // rather than whatever the bitmap holds when the store is replayed.
+            canvas_base::add_draw_command(command);
+        }
+
         gdi_store_command_segment *current_segment = redraw_segments_.get_current_segment();
-        current_segment->add_command(command);
+        current_segment->add_command(command, is_blit ? bcache : nullptr);
+        if (seg_trace_enabled()) {
+            seg_trace_command(id, command);
+        }
         // Without redraw storing, earlier pixels may exist only in the screen bitmap.
         if ((created_non_redraw_segment && !client->get_ws().no_redraw_storing_enabled()) || (flags & flags_enable_alpha)) {
             scr->flags_ |= screen::FLAG_SERVER_REDRAW_PENDING;
         }
 
-        canvas_base::add_draw_command(command);
+        if (!is_blit) {
+            canvas_base::add_draw_command(command);
+        }
     }
 
     bool redraw_msg_canvas::scroll(eka2l1::rect clip_space, const eka2l1::vec2 offset, eka2l1::rect source_rect) {
