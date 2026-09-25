@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <queue>
 #include <thread>
 
@@ -41,6 +42,7 @@
 #include <disasm/disasm.h>
 
 #include <kernel/kernel.h>
+#include <utils/reqsts.h>
 #include <kernel/libmanager.h>
 #include <kernel/guomen_process.h>
 #include <kernel/scheduler.h>
@@ -99,6 +101,10 @@ namespace eka2l1 {
         reset();
     }
 
+    static void start_ipc_watch(kernel_system *kern, ntimer *timing);
+    static void schedule_ipc_watch_once(ntimer *timing);
+    static void stop_ipc_watch(ntimer *timing);
+
     kernel_system::~kernel_system() {
         wipeout();
     }
@@ -106,6 +112,7 @@ namespace eka2l1 {
     void kernel_system::wipeout() {
         wiping_ = true;
         timing_->remove_event(realtime_ipc_signal_evt_);
+        stop_ipc_watch(timing_);
 
 #define OBJECT_CONTAINER_CLEANUP(container) \
     for (auto &obj : container) {           \
@@ -198,6 +205,8 @@ namespace eka2l1 {
             thr->signal_request();
             unlock();
         });
+
+        start_ipc_watch(this, timing_);
 
         // Get base time
         base_time_ = common::get_current_utc_time_in_microseconds_since_0ad();
@@ -992,6 +1001,7 @@ namespace eka2l1 {
         }
 
         LOG_TRACE(KERNEL, "Spawned process: {}, entry point = 0x{:X}", process_name, cs->get_code_run_addr(&(*pr)));
+        schedule_ipc_watch_once(timing_);
         
         if (eka2l1::has_root_name(path, true)) {
             cs->set_full_path(path);
@@ -1083,6 +1093,146 @@ namespace eka2l1 {
             kernel::undertaker *utaker = reinterpret_cast<kernel::undertaker *>(kobj.get());
             utaker->complete(literally_dies);
         }
+    }
+
+    static const char *ipc_status_name(const ipc_message_status st) {
+        switch (st) {
+        case ipc_message_status::delivered:
+            return "delivered";
+        case ipc_message_status::accepted:
+            return "accepted";
+        case ipc_message_status::completed:
+            return "completed";
+        default:
+            break;
+        }
+        return "none";
+    }
+
+    static const char *thread_state_name(const kernel::thread_state st) {
+        switch (st) {
+        case kernel::thread_state::create:
+            return "create";
+        case kernel::thread_state::run:
+            return "run";
+        case kernel::thread_state::wait:
+            return "wait-request";
+        case kernel::thread_state::ready:
+            return "ready";
+        case kernel::thread_state::stop:
+            return "stop";
+        case kernel::thread_state::wait_fast_sema:
+            return "wait-semaphore";
+        case kernel::thread_state::wait_mutex:
+            return "wait-mutex";
+        case kernel::thread_state::wait_condvar:
+            return "wait-condvar";
+        case kernel::thread_state::wait_mutex_suspend:
+        case kernel::thread_state::wait_fast_sema_suspend:
+        case kernel::thread_state::wait_condvar_suspend:
+            return "suspended";
+        case kernel::thread_state::hold_mutex_pending:
+            return "hold-mutex-pending";
+        case kernel::thread_state::wait_hle:
+            return "wait-hle";
+        default:
+            break;
+        }
+        return "?";
+    }
+
+    // Diagnostic (env EKA2L1_IPC_WATCH_SECS=N): every N emulated seconds, log each IPC message that has been
+    // sent and not completed, with its client thread, server and function, plus every guest thread that is not
+    // runnable. A guest app that stops painting is usually a thread parked on a request no server answers;
+    // this names the request. Runs with the kernel lock held.
+    static void dump_outstanding_ipc(kernel_system *kern, ntimer *timing) {
+        LOG_ERROR(KERNEL, "IPC watch at {} ms: requests sent and not completed", timing->microseconds() / 1000);
+
+        for (int handle = 1; handle <= 0x1000; handle++) {
+            ipc_msg *msg = kern->get_msg(handle);
+            if (!msg || msg->is_free() || (msg->type == ipc_message_type_wild)
+                || (msg->msg_status == ipc_message_status::completed) || (msg->msg_status == ipc_message_status::none)
+                || !msg->own_thr || !msg->request_sts || (msg->own_thr->current_state() == kernel::thread_state::stop)) {
+                continue;
+            }
+
+            // HLE servers complete through ipc_context, which leaves msg_status alone; the client's
+            // TRequestStatus is the truth: only a request still at KRequestPending is outstanding.
+            kernel::process *client = msg->own_thr->owning_process();
+            epoc::request_status *sts = client ? msg->request_sts.get(client) : nullptr;
+            if (!sts || (sts->status != epoc::request_status::pending_status)) {
+                continue;
+            }
+
+            std::string server_name = "?";
+            if (msg->msg_session && msg->msg_session->get_server()) {
+                server_name = msg->msg_session->get_server()->name();
+            }
+
+            LOG_ERROR(KERNEL, "  msg {}: {} -> {} function {} (0x{:X}) {} {}", msg->id,
+                msg->own_thr ? msg->own_thr->name() : std::string("?"), server_name, msg->function,
+                msg->function, (msg->type == ipc_message_type_sync) ? "sync" : "session",
+                ipc_status_name(msg->msg_status));
+        }
+
+        for (auto &obj : kern->get_thread_list()) {
+            kernel::thread *thr = reinterpret_cast<kernel::thread *>(obj.get());
+            if (!thr) {
+                continue;
+            }
+
+            const kernel::thread_state st = thr->current_state();
+            if ((st == kernel::thread_state::run) || (st == kernel::thread_state::ready) || (st == kernel::thread_state::stop)) {
+                continue;
+            }
+
+            LOG_ERROR(KERNEL, "  thread {} ({}): {}", thr->name(),
+                thr->owning_process() ? thr->owning_process()->name() : std::string("?"), thread_state_name(st));
+        }
+    }
+
+    static int ipc_watch_evt = -1;
+    static bool ipc_watch_scheduled = false;
+    static std::uint64_t ipc_watch_interval_us = 0;
+
+    static void start_ipc_watch(kernel_system *kern, ntimer *timing) {
+        const char *watch = std::getenv("EKA2L1_IPC_WATCH_SECS");
+        const long secs = watch ? std::strtol(watch, nullptr, 10) : 0;
+
+        if ((secs <= 0) || (ipc_watch_evt >= 0)) {
+            return;
+        }
+
+        ipc_watch_interval_us = static_cast<std::uint64_t>(secs) * 1000000ULL;
+        ipc_watch_evt = timing->register_event("IpcWatch", [kern, timing](std::uint64_t, std::uint64_t) {
+            kern->lock();
+            dump_outstanding_ipc(kern, timing);
+            kern->unlock();
+
+            timing->schedule_event(static_cast<std::int64_t>(ipc_watch_interval_us), ipc_watch_evt, 0);
+        });
+    }
+
+    // The system resets the timer after the kernel (dropping every scheduled event), so the first dump is
+    // scheduled when the first process is spawned rather than at registration.
+    static void schedule_ipc_watch_once(ntimer *timing) {
+        if ((ipc_watch_evt < 0) || ipc_watch_scheduled) {
+            return;
+        }
+
+        ipc_watch_scheduled = true;
+        timing->schedule_event(static_cast<std::int64_t>(ipc_watch_interval_us), ipc_watch_evt, 0);
+    }
+
+    static void stop_ipc_watch(ntimer *timing) {
+        if (ipc_watch_evt < 0) {
+            return;
+        }
+
+        timing->unschedule_event(ipc_watch_evt, 0);
+        timing->remove_event(ipc_watch_evt);
+        ipc_watch_evt = -1;
+        ipc_watch_scheduled = false;
     }
 
     void kernel_system::free_msg(ipc_msg_ptr msg) {

@@ -327,10 +327,27 @@ namespace eka2l1::loader {
             } else {
                 device_filename_parts[0] = device_filename_parts[0].substr(3, std::string::npos);
 
+                // Series 80 v2: the 9300i ships the 9300's Dev9300.sis and the 9500 has no Dev*.sis naming
+                // it, but each ROM's hal.dll carries its own EMachineUid: 0x101F8DDB (9300 and 9500, "Erin")
+                // and 0x1020E048 (9300i). Without this the 9300i installs as a second RAE-6.
                 if (device_filename_parts[0] == "9300") {
                     manufacturer = "Nokia";
-                    firmcode = "RAE-6";
-                    model = "Nokia 9300";
+
+                    if (determine_rpkg_machine_uid(extracted_path) == 0x1020E048) {
+                        firmcode = "RA-8";
+                        model = "Nokia 9300i";
+                    } else {
+                        firmcode = "RAE-6";
+                        model = "Nokia 9300";
+                    }
+
+                    return true;
+                }
+
+                if (device_filename_parts[0] == "9500") {
+                    manufacturer = "Nokia";
+                    firmcode = "RA-2";
+                    model = "Nokia 9500";
 
                     return true;
                 }

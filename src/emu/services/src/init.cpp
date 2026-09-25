@@ -326,6 +326,10 @@ namespace eka2l1 {
             CREATE_SERVER(sys, drm_notifier_server);
             CREATE_SERVER(sys, sisregistry_server);
             CREATE_SERVER(sys, alarm_server);
+
+            if (sys->get_symbian_version_use() == epocver::epoc7) {
+                CREATE_SERVER(sys, alarm_alert_server_eka1);
+            }
             CREATE_SERVER(sys, socket_server);
 
             CREATE_SERVER(sys, comm_server);

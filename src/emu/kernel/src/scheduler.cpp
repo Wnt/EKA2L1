@@ -23,6 +23,7 @@
 #include <common/algorithm.h>
 #include <common/configure.h>
 #include <common/log.h>
+#include <common/watchdog.h>
 
 #include <functional>
 #include <kernel/kernel.h>
@@ -129,6 +130,8 @@ namespace eka2l1::kernel {
 
             // Let free access to kernel now
             if (kern->should_core_idle_when_inactive()) {
+                const common::parked_scope parked("no runnable guest thread");
+
                 kern->unlock();
                 idle_event.wait();
                 kern->lock();
