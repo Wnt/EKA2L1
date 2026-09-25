@@ -633,6 +633,17 @@ namespace eka2l1 {
         return false;
     }
 
+    // The registry owns its icon bitmaps for as long as it lives. fbs_server::create_bitmap() hands back an
+    // object with no reference, and every client that picks an icon up (GetAppIcon → CFbsBitmap::Duplicate)
+    // adds one to the FBS object table and drops it again on close. Without a reference of our own the first
+    // client to close an icon frees it, and the next GetAppIcon for that app reads a freed fbsbitmap (Desk:
+    // open the Personal folder, Esc, then Clock's icon is asked for again → host SIGSEGV).
+    static void hold_icon_bitmap(fbsbitmap *bmp) {
+        if (bmp) {
+            bmp->ref();
+        }
+    }
+
     bool read_icon_data_aif(common::ro_stream *stream, fbs_server *serv, std::vector<apa_app_icon> &icon_list, const address rom_addr) {
         // Seek to header pos, over the UIDs
         epoc::uid_type uids;
@@ -751,6 +762,7 @@ namespace eka2l1 {
 
                         // Auto support dirty. TODO not hardcode
                         icon_list[index].bmp_ = serv->create_bitmap(info, true, false, false);
+                        hold_icon_bitmap(icon_list[index].bmp_);
                         return true;
                     };
 
@@ -805,6 +817,7 @@ namespace eka2l1 {
                 info.size_.y = icon_list_file.sbm_headers[i].size_pixels.y;
 
                 icon_list[i].bmp_ = serv->create_bitmap(info, true, false, false);
+                hold_icon_bitmap(icon_list[i].bmp_);
                 icon_list[i].bmp_rom_addr_ = 0;
                 icon_list[i].number_ = i / 2;
             }
