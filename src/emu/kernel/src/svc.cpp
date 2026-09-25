@@ -1354,7 +1354,11 @@ namespace eka2l1::epoc {
         }
 
         if (kern->get_config()->log_ipc) {
-            LOG_TRACE(KERNEL, "Sending {} sync to {} from {}", ord, ss->get_server()->name(), kern->crr_thread()->name());
+            LOG_TRACE(KERNEL, "Sending {} {} to {} from {} (args 0x{:X} 0x{:X} 0x{:X} 0x{:X}, flags 0x{:X})", ord,
+                sync ? "sync" : "async", ss->get_server()->name(), kern->crr_thread()->name(),
+                static_cast<std::uint32_t>(arg.args[0]), static_cast<std::uint32_t>(arg.args[1]),
+                static_cast<std::uint32_t>(arg.args[2]), static_cast<std::uint32_t>(arg.args[3]),
+                static_cast<std::uint32_t>(arg.flag));
         }
 
         const std::string server_name = ss->get_server()->name();
