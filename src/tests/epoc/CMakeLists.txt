@@ -29,6 +29,7 @@ set(CORE_TEST_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/services/applist/data_type.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/applist/icon_by_uid.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/rom_mode.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/glyph_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/bitmap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/fontmatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/gdrmetrics.cpp

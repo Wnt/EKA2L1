@@ -26,6 +26,8 @@
 #include <cstdlib>
 #include <common/cvt.h>
 #include <services/fbs/fbs.h>
+#include <services/fbs/glyph_cache.h>
+#include <type_traits>
 #include <services/fbs/linked_font_config.h>
 
 #include <common/buffer.h>
@@ -557,6 +559,27 @@ namespace eka2l1 {
 
     template <typename T>
     void fbs_server::destroy_bitmap_font(T *bmpfont) {
+        // Clients search the shared cache without IPC. A stale entry surviving
+        // address reuse supplies another face's metrics and bitmap format.
+        // Walk every pointer-ABI session, not just the one closing this font.
+        if (!(bmpfont->openfont.ptr_address() & 1) && session_cache_link) {
+            auto *mem = get_system()->get_memory_system();
+            for (auto link = session_cache_link->next.get(mem); link; link = link->next.get(mem)) {
+                auto *cache = link->cache.get(mem);
+                auto *slots = eka2l1::ptr<std::int32_t>(cache->offset_array.offset_array_offset).get(mem);
+                if (!slots) continue;
+                const auto discard = [&](auto *entry_type) {
+                    using entry = std::remove_pointer_t<decltype(entry_type)>;
+                    epoc::discard_pointer_font_glyphs<entry>(slots, cache->offset_array.offset_array_count,
+                        bmpfont->openfont.ptr_address(),
+                        [mem](std::uint32_t address) { return eka2l1::ptr<entry>(address).get(mem); },
+                        [this](entry *glyph) { free_general_data(glyph); });
+                };
+                if (kern->is_eka1()) discard(static_cast<epoc::open_font_session_cache_entry_v1 *>(nullptr));
+                else discard(static_cast<epoc::open_font_session_cache_entry_v2 *>(nullptr));
+            }
+        }
+
         // On EKA1, free the glyph cache offset
         if (legacy_level() >= FBS_LEGACY_LEVEL_KERNEL_TRANSITION) {
             epoc::open_font_v1 *ofo = reinterpret_cast<epoc::open_font_v1 *>(guest_general_data_to_host_ptr(bmpfont->openfont.template cast<std::uint8_t>()));
