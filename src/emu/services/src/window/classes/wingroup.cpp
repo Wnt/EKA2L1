@@ -212,6 +212,13 @@ namespace eka2l1::epoc {
             updated.type = text_cursor::type_none;
         }
 
+        static const bool trace = std::getenv("EKA2L1_WS_SEG_TRACE") != nullptr;
+        if (trace) {
+            LOG_WARN(SERVICE_WINDOW, "SEGTRACE group text cursor win 0x{:X} pos ({},{}) size {}x{} ascent {} type {} flags 0x{:X}", win->id,
+                cmd_set->pos.x, cmd_set->pos.y, cmd_set->cursor.width, cmd_set->cursor.height, cmd_set->cursor.ascent,
+                cmd_set->cursor.type, cmd_set->cursor.flags);
+        }
+
         const bool changed = !(updated == cursor);
         cursor = updated;
 

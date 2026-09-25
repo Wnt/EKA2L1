@@ -199,9 +199,18 @@ namespace eka2l1::epoc {
         std::vector<void*> font_objects_;
         std::vector<void*> bitmap_objects_;
 
+        // Driver textures this segment's bitmap commands draw, held in the bitmap cache so that their
+        // content stays what was blitted (see bitmap_cache::retain).
+        bitmap_cache *texture_owner_ = nullptr;
+        std::vector<drivers::handle> held_textures_;
+
         ~gdi_store_command_segment();
 
-        void add_command(gdi_store_command &cmd);
+        /**
+         * @param cache  When given, the textures a bitmap command already resolved are held in it for as
+         *               long as this segment lives.
+         */
+        void add_command(gdi_store_command &cmd, bitmap_cache *cache = nullptr);
     };
 
     class gdi_store_command_collection {

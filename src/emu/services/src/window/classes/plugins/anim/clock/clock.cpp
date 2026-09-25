@@ -733,7 +733,8 @@ namespace eka2l1::epoc {
         return data && parse_clock_buffer_impl(data, size, with_hand_centre_offset, out);
     }
 
-    std::u16string clock_format_time(const std::u16string &format, const std::int64_t local_seconds, const std::uint32_t microseconds) {
+    std::u16string clock_format_time(const std::u16string &format, const std::int64_t local_seconds, const std::uint32_t microseconds,
+        const clock_time_locale &locale) {
         static const char *DAY_NAMES[] = { "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday" };
         static const char *DAY_ABBREVIATIONS[] = { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
         static const char *MONTH_NAMES[] = { "January", "February", "March", "April", "May", "June", "July", "August",
@@ -805,8 +806,23 @@ namespace eka2l1::epoc {
 
                 break;
 
-            case u'H':
             case u'J':
+                if (locale.twelve_hour_) {
+                    // The locale's 12-hour clock, without a leading zero: "7:25" beside the am/pm text, as
+                    // the 9300's status pane shows it (User Guide p. 21).
+                    std::int32_t hour12 = hour % 12;
+                    if (hour12 == 0) {
+                        hour12 = 12;
+                    }
+
+                    result += clock_number(hour12, 2, false);
+                    break;
+                }
+
+                result += clock_number(hour, 2, !abbreviate);
+                break;
+
+            case u'H':
                 // 24-hour clock
                 result += clock_number(hour, 2, !abbreviate);
                 break;
@@ -843,23 +859,32 @@ namespace eka2l1::epoc {
 
             case u'A':
             case u'B': {
-                // am/pm text. %B only shows with a 12-hour clock, and this locale has a 24-hour one.
-                if (code == u'B') {
+                // am/pm text. %B only shows with a 12-hour clock; %A always.
+                if ((code == u'B') && !locale.twelve_hour_) {
                     break;
                 }
 
                 // Leading (%-A) only when the locale puts it before the time, trailing (%+A) only after.
-                if (leading) {
+                if ((leading && !locale.am_pm_before_) || (trailing && locale.am_pm_before_)) {
                     break;
                 }
 
-                if (!trailing && !abbreviate) {
-                    result += u' ';
-                } else if (trailing) {
-                    result += u' ';
+                const std::u16string &text = (hour < 12) ? locale.am_ : locale.pm_;
+
+                if (leading) {
+                    result += text;
+                    if (locale.am_pm_space_) {
+                        result += u' ';
+                    }
+                } else if (trailing || !abbreviate) {
+                    if (locale.am_pm_space_) {
+                        result += u' ';
+                    }
+                    result += text;
+                } else {
+                    result += text;
                 }
 
-                result += clock_ascii((hour < 12) ? "am" : "pm");
                 break;
             }
 

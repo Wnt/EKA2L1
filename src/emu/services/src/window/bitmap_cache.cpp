@@ -52,7 +52,8 @@
 namespace eka2l1::epoc {
     bitmap_cache::bitmap_cache(kernel_system *kern_)
         : fbss_(nullptr)
-        , kern(kern_) {
+        , kern(kern_)
+        , driver(nullptr) {
         std::fill(driver_textures.begin(), driver_textures.end(), 0);
         std::fill(hashes.begin(), hashes.end(), 0);
     }
@@ -250,6 +251,37 @@ namespace eka2l1::epoc {
         return hash;
     }
 
+    bool bitmap_cache::held_by_store(const drivers::handle h) const {
+        return h && (store_refs_.find(h) != store_refs_.end());
+    }
+
+    void bitmap_cache::retain(const drivers::handle h) {
+        if (h) {
+            store_refs_[h]++;
+        }
+    }
+
+    void bitmap_cache::release(const drivers::handle h) {
+        auto ite = store_refs_.find(h);
+        if (ite == store_refs_.end()) {
+            return;
+        }
+
+        if (--ite->second != 0) {
+            return;
+        }
+
+        store_refs_.erase(ite);
+
+        if (orphans_.erase(h) && driver) {
+            drivers::graphics_command_builder builder;
+            builder.destroy_bitmap(h);
+
+            drivers::command_list retrieved = builder.retrieve_command_list();
+            driver->submit_command_list(retrieved);
+        }
+    }
+
     std::int64_t bitmap_cache::get_suitable_bitmap_index() {
         // First time, will scans through the bitmap array to find empty box
         // Sometimes, app might purges a lot of bitmaps at same time
@@ -272,6 +304,8 @@ namespace eka2l1::epoc {
 
     drivers::handle bitmap_cache::add_or_get(drivers::graphics_driver *driver, epoc::bitwise_bitmap *bmp, 
         drivers::graphics_command_builder *builder, gdi_store_command *update_cmd) {
+        this->driver = driver;
+
         if (!fbss_) {
             server_ptr ss = kern->get_by_name<service::server>(epoc::get_fbs_server_name_by_epocver(
                 kern->get_epoc_version()));
@@ -306,6 +340,10 @@ namespace eka2l1::epoc {
                 idx = get_suitable_bitmap_index();
             }
 
+            if (held_by_store(driver_textures[idx])) {
+                orphans_.insert(driver_textures[idx]);
+            }
+
             bitmaps[idx] = bmp;
             driver_textures[idx] = 0;
             hash = (hashes[idx] == 0) ? hash_bitwise_bitmap(bmp) : hashes[idx];
@@ -327,6 +365,19 @@ namespace eka2l1::epoc {
             gdi_store_command_update_texture_data &data = update_cmd->get_data_struct<gdi_store_command_update_texture_data>();
             data.destroy_handle_ = 0;
             data.do_swizz_ = false;
+        }
+
+        if (!should_recreate && should_upload && held_by_store(driver_textures[idx])) {
+            // The redraw store still replays the current content of this texture: leave it to the store,
+            // and put the new content into a texture of its own.
+            orphans_.insert(driver_textures[idx]);
+            driver_textures[idx] = drivers::create_bitmap(driver, bmp->header_.size_pixels, suit_bpp);
+        }
+
+        if (should_recreate && held_by_store(driver_textures[idx])) {
+            // Same when the size or depth changed: the store destroys the old texture once done with it.
+            orphans_.insert(driver_textures[idx]);
+            driver_textures[idx] = 0;
         }
 
         if (should_recreate) {

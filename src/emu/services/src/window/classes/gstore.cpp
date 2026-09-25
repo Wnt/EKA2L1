@@ -40,9 +40,15 @@ namespace eka2l1::epoc {
         for (std::size_t i = 0; i < bitmap_objects_.size(); i++) {
             reinterpret_cast<fbsbitmap*>(bitmap_objects_[i])->deref();
         }
+
+        if (texture_owner_) {
+            for (const drivers::handle h : held_textures_) {
+                texture_owner_->release(h);
+            }
+        }
     }
 
-    void gdi_store_command_segment::add_command(gdi_store_command &command) {
+    void gdi_store_command_segment::add_command(gdi_store_command &command, bitmap_cache *cache) {
         if (command.opcode_ == gdi_store_command_draw_text) {
             auto &data = command.get_data_struct_const<gdi_store_command_draw_text_data>();
             if (data.fbs_font_ptr_) {
@@ -66,6 +72,16 @@ namespace eka2l1::epoc {
                 }
             }
             
+            if (cache) {
+                for (const drivers::handle h : { data.main_drv_, data.mask_drv_ }) {
+                    if (h && (std::find(held_textures_.begin(), held_textures_.end(), h) == held_textures_.end())) {
+                        texture_owner_ = cache;
+                        held_textures_.push_back(h);
+                        cache->retain(h);
+                    }
+                }
+            }
+
             if (data.mask_fbs_bitmap_ && ((data.gdi_flags_ & GDI_STORE_COMMAND_MASK_RAW) == 0)) {
                 auto ite = std::find(bitmap_objects_.begin(), bitmap_objects_.end(), data.mask_fbs_bitmap_);
 
