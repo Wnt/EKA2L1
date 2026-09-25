@@ -436,9 +436,9 @@ namespace eka2l1 {
                 is_supported_by_module(ctx);
                 break;
 
-            // RTelServer::SetPriorityClient and SetExtendedErrorGranularity only record a preference.
-            // Left unanswered, the Series 80 Contacts app blocked on 14 before its first redraw; the
-            // 7.0s SecurityServer/CbsServer/SatServer call both right after LoadPhoneModule too.
+            // RTelServer::SetPriorityClient / SetExtendedErrorGranularity only record a preference.
+            // The 7.0s Series 80 servers (SecurityServer, CbsServer, SatServer) call 14 right after
+            // LoadPhoneModule and Contacts blocks on it before its first redraw; they just need the answer.
             case epoc::etel_old_set_priority_client:
             case epoc::etel_old_set_extend_error_granularity:
                 ctx->complete(epoc::error_none);

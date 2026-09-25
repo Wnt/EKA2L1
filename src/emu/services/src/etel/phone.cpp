@@ -20,6 +20,7 @@
 #include <services/context.h>
 #include <services/etel/phone.h>
 #include <services/etel/subsess.h>
+#include <kernel/thread.h>
 #include <utils/err.h>
 
 #include <common/cvt.h>
@@ -381,7 +382,7 @@ namespace eka2l1 {
                 break;
 
             default:
-                LOG_ERROR(SERVICE_ETEL, "Unimplemented etel phone opcode {}", ctx->msg->function);
+                legacy_unmodelled(ctx);
                 break;
             }
         } else {
@@ -537,5 +538,47 @@ namespace eka2l1 {
         network_info_.status_ = epoc::etel_mobile_phone_network_status_available;
         network_info_.band_info_ = epoc::etel_mobile_phone_band_unknown;
         return true;
+    }
+
+    // The 7.0s/8.x multimode ETel (etelmm) numbers its phone requests from 3000 and their cancels at
+    // request + 500. Without a modem behind the TSY a notification never fires and a query has
+    // nothing to report: park asynchronous requests until they are cancelled, answer synchronous
+    // ones KErrNotSupported at once (Series 80's Telephone blocked forever on an unanswered 3595,
+    // the cancel of its own 3095); never leave a client thread waiting.
+    void etel_phone_subsession::legacy_unmodelled(service::ipc_context *ctx) {
+        static constexpr int LEGACY_MM_BASE = 3000;
+        static constexpr int LEGACY_MM_CANCEL_OFFSET = 500;
+        static constexpr int LEGACY_MM_END = 4000;
+
+        const int fn = ctx->msg->function;
+        const bool is_sync = (ctx->msg == ctx->msg->own_thr->get_sync_msg());
+
+        if ((fn >= LEGACY_MM_BASE + LEGACY_MM_CANCEL_OFFSET) && (fn < LEGACY_MM_END)) {
+            auto pending = legacy_pending_.find(fn - LEGACY_MM_CANCEL_OFFSET);
+
+            if (pending != legacy_pending_.end()) {
+                pending->second.complete(epoc::error_cancel);
+                legacy_pending_.erase(pending);
+            }
+
+            LOG_TRACE(SERVICE_ETEL, "Legacy etel phone cancel {} answered", fn);
+            ctx->complete(epoc::error_none);
+            return;
+        }
+
+        if (!is_sync && (fn >= LEGACY_MM_BASE) && (fn < LEGACY_MM_END)) {
+            LOG_INFO(SERVICE_ETEL, "Legacy etel phone request {} parked until cancelled (no modem)", fn);
+
+            auto existing = legacy_pending_.find(fn);
+            if (existing != legacy_pending_.end()) {
+                existing->second.complete(epoc::error_cancel);
+            }
+
+            legacy_pending_[fn] = epoc::notify_info(ctx->msg->request_sts, ctx->msg->own_thr);
+            return;
+        }
+
+        LOG_ERROR(SERVICE_ETEL, "Unimplemented etel phone opcode {}, completed as not supported", fn);
+        ctx->complete(epoc::error_not_supported);
     }
 }

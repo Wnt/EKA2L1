@@ -20,6 +20,8 @@
 #pragma once
 
 #include <services/etel/common.h>
+
+#include <map>
 #include <utils/reqsts.h>
 
 #include <cstdint>
@@ -68,7 +70,12 @@ namespace eka2l1 {
         epoc::notify_info indicator_change_nof_;
         epoc::notify_info battery_info_change_nof_;
 
+        // 7.0s/8.x multimode requests this HLE does not model, keyed by opcode: a notification or
+        // query that never completes, until its cancel (opcode + 500) ends it with KErrCancel.
+        std::map<int, epoc::notify_info> legacy_pending_;
+
     protected:
+        void legacy_unmodelled(service::ipc_context *ctx);
         void get_status(service::ipc_context *ctx);
         void init(service::ipc_context *ctx);
         void enumerate_lines(service::ipc_context *ctx);
