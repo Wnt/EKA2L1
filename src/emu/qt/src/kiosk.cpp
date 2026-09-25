@@ -42,6 +42,9 @@
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QTimer>
+#include <QString>
+#include <sstream>
+#include <unordered_map>
 
 #include <algorithm>
 #include <cctype>
@@ -708,10 +711,30 @@ namespace eka2l1::desktop {
 
     control_server::control_server(emulator &state)
         : state_(state)
-        , server_(new QLocalServer()) {
+        , server_(new QLocalServer())
+        , input_timer_(new QTimer(server_)) {
+        input_timer_->setSingleShot(true);
+        QObject::connect(input_timer_, &QTimer::timeout, server_, [this]() {
+            if (input_commands_.empty()) return;
+            auto command = std::move(input_commands_.front());
+            input_commands_.pop_front();
+            command();
+            input_timer_->start(30);
+        });
         QObject::connect(server_, &QLocalServer::newConnection, server_, [this]() {
             on_new_connection();
         });
+    }
+
+    void control_server::enqueue_input(std::function<void()> command) {
+        // The ARM wserv has a small per-client queue. Give the app a turn between
+        // synthetic characters, as a physical keyboard does. Do not purge raw edges.
+        if (input_commands_.empty() && !input_timer_->isActive()) {
+            command();
+            input_timer_->start(30);
+        } else {
+            input_commands_.push_back(std::move(command));
+        }
     }
 
     control_server::~control_server() {
@@ -805,7 +828,11 @@ namespace eka2l1::desktop {
         std::size_t newline = 0;
 
         while ((newline = it->second.find('\n')) != std::string::npos) {
-            const std::string line = trim(it->second.substr(0, newline));
+            std::string line = it->second.substr(0, newline);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            const auto first = line.find_first_not_of(" \t");
+            if (first == std::string::npos) line.clear();
+            else line.erase(0, first);
             it->second.erase(0, newline + 1);
 
             if (line.empty()) {
@@ -839,7 +866,8 @@ namespace eka2l1::desktop {
     std::string control_server::execute(const std::string &line, bool &quit_after) {
         const std::size_t space = line.find_first_of(" \t");
         const std::string verb = lowercase(line.substr(0, space));
-        const std::string arg = (space == std::string::npos) ? std::string() : trim(line.substr(space + 1));
+        const std::string arg = (space == std::string::npos) ? std::string()
+            : (verb == "type" ? line.substr(space + 1) : trim(line.substr(space + 1)));
 
         std::string err;
 
@@ -849,7 +877,65 @@ namespace eka2l1::desktop {
 
         if (verb == "help") {
             return "OK verbs: ping | apps | list [all] | focus | launch <uid|caption> | switch <uid|caption> | "
-                   "screenshot <path> [native] | stats | refresh | reset | quit";
+                   "key <name> [down|up] | type <UTF-8 text> | screenshot <path> [native] | stats | refresh | reset | quit";
+        }
+
+        if (verb == "key" || verb == "type") {
+            if (!state_.winserv) return "ERR no window server";
+            if (input_commands_.size() + arg.size() > 65536) return "ERR input queue full";
+            auto edge = [this](std::uint32_t code, std::uint32_t text, bool down) {
+                if (!state_.winserv) return;
+                drivers::input_event event{};
+                event.type_ = drivers::input_event_type::key;
+                event.key_.code_ = code;
+                event.key_.text_ = text;
+                event.key_.state_ = down ? drivers::key_state::pressed : drivers::key_state::released;
+                state_.winserv->queue_input_from_driver(event);
+            };
+            if (verb == "type") {
+                const auto chars = QString::fromUtf8(arg.data(), static_cast<int>(arg.size())).toUcs4();
+                for (auto ch : chars) {
+                    const auto key = static_cast<std::uint32_t>(QChar::toUpper(ch));
+                    enqueue_input([this, edge, key, ch]() {
+                        const std::lock_guard<std::timed_mutex> guard(state_.lockdown);
+                        edge(key, ch, true);
+                        edge(key, ch, false);
+                    });
+                }
+                return "OK queued " + std::to_string(chars.size());
+            }
+            std::istringstream words(arg);
+            std::string name, action, extra;
+            words >> name >> action >> extra;
+            action = lowercase(action);
+            if (!extra.empty() || (!action.empty() && action != "down" && action != "up"))
+                return "ERR key <name> [down|up]";
+            static const std::unordered_map<std::string, std::uint32_t> names = {
+                {"enter", Qt::Key_Return}, {"return", Qt::Key_Return}, {"escape", Qt::Key_Escape},
+                {"esc", Qt::Key_Escape}, {"tab", Qt::Key_Tab}, {"backspace", Qt::Key_Backspace},
+                {"delete", Qt::Key_Delete}, {"space", Qt::Key_Space}, {"left", Qt::Key_Left},
+                {"right", Qt::Key_Right}, {"up", Qt::Key_Up}, {"down", Qt::Key_Down},
+                {"home", Qt::Key_Home}, {"end", Qt::Key_End}, {"pageup", Qt::Key_PageUp},
+                {"pagedown", Qt::Key_PageDown}, {"shift", Qt::Key_Shift}, {"ctrl", Qt::Key_Control},
+                {"control", Qt::Key_Control}, {"alt", Qt::Key_Alt}, {"chr", Qt::Key_Alt},
+                {"menu", Qt::Key_Menu}
+            };
+            const auto lower = lowercase(name);
+            std::uint32_t code = 0, text = 0;
+            if (auto found = names.find(lower); found != names.end()) code = found->second;
+            else if (std::regex_match(lower, std::regex("f([1-9]|1[0-2])"))) code = Qt::Key_F1 + std::stoi(lower.substr(1)) - 1;
+            else {
+                auto chars = QString::fromUtf8(name.c_str()).toUcs4();
+                if (chars.size() != 1) return "ERR unknown key";
+                // key is a physical key; type supplies Unicode text and modifiers.
+                code = QChar::toUpper(chars[0]);
+            }
+            enqueue_input([this, edge, code, text, action]() {
+                const std::lock_guard<std::timed_mutex> guard(state_.lockdown);
+                if (action != "up") edge(code, text, true);
+                if (action != "down") edge(code, text, false);
+            });
+            return "OK queued key";
         }
 
         if (verb == "apps") {
@@ -988,6 +1074,8 @@ namespace eka2l1::desktop {
         }
 
         if (verb == "reset") {
+            input_timer_->stop();
+            input_commands_.clear();
             if (!state_.ui_main) {
                 return "ERR no window";
             }
@@ -1000,6 +1088,8 @@ namespace eka2l1::desktop {
         }
 
         if (verb == "quit") {
+            input_timer_->stop();
+            input_commands_.clear();
             quit_after = true;
             return "OK bye";
         }

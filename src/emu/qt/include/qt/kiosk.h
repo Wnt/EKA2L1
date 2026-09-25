@@ -24,6 +24,8 @@
 // themselves in --help; the protocol is described on control_server below.
 
 #include <cstdint>
+#include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -31,6 +33,7 @@
 
 class QLocalServer;
 class QLocalSocket;
+class QTimer;
 
 namespace eka2l1 {
     class applist_server;
@@ -145,6 +148,8 @@ namespace eka2l1::desktop {
      *                              a document (a file, or a URL for Web) opens with EApaCommandOpen
      *   switch <uid|caption>       OK switched uid=... name="..." wg=N ordinal=N focus=0|1
      *                              | OK launched ...                                    front, or start it
+     *   key <name> [down|up]       OK queued key   named physical key, or a tap without an edge
+     *   type <UTF-8 text>          OK queued N     ordered characters, one per 30 ms; preserves spaces
      *   screenshot <path> [native] OK <path> <W>x<H>        the display window, or the screen at 1:1
      *   stats                      OK frames=N fps=N view=WxH+X+Y ...  presents since start, guest fps
      *   refresh                    OK refresh      recompose the screen from the windows' stored drawing
@@ -163,6 +168,9 @@ namespace eka2l1::desktop {
         QLocalServer *server_;
         std::string path_;
         std::map<QLocalSocket *, std::string> pending_;
+        QTimer *input_timer_;
+        std::deque<std::function<void()>> input_commands_;
+        void enqueue_input(std::function<void()> command);
 
         void on_new_connection();
         void on_ready_read(QLocalSocket *socket);

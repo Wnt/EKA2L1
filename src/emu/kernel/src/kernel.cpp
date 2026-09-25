@@ -117,6 +117,7 @@ namespace eka2l1 {
 
     void kernel_system::wipeout() {
         wiping_ = true;
+        raw_events_.reset();
         window_server_thread_ = 0;
         window_server_entry_ = 0;
         window_server_handles_screen_on_ = false;

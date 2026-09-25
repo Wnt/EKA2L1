@@ -20,6 +20,7 @@
 #pragma once
 
 #include <kernel/btrace.h>
+#include <kernel/raw_event.h>
 #include <kernel/change_notifier.h>
 #include <kernel/chunk.h>
 #include <kernel/codeseg.h>
@@ -290,6 +291,8 @@ namespace eka2l1 {
 
     class kernel_system {
     private:
+        kernel::raw_event_queue raw_events_;
+        void deliver_raw_event();
         friend class debugger_base;
         friend class imgui_debugger;
         friend class gdbstub;
@@ -402,6 +405,13 @@ namespace eka2l1 {
         void cpu_exception_thread_handle(arm::core *core);
 
     public:
+        bool rom_raw_input_enabled() const;
+        void capture_raw_event_hook();
+        void release_raw_event_hook();
+        void request_raw_event(address buffer, address status);
+        void cancel_raw_event();
+        int add_raw_event(const epoc::raw_event_eka1 &event);
+        void detach_raw_event_owner(kernel::thread *thread);
         explicit kernel_system(system *esys, ntimer *timing, io_system *io_sys, config::state *conf,
             config::app_settings *settings, loader::rom *rom_info, arm::core *cpu, disasm *diassembler);
 

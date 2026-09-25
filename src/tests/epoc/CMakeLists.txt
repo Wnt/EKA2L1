@@ -8,6 +8,7 @@ set(CORE_TEST_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/vfs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernel/ipc_arg.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernel/rendezvous.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernel/raw_event.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernel/timer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vfs/rom_wserv.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernel/locale.cpp

@@ -34,7 +34,23 @@ failure. Only the core English ELocl.dll is supported; other locale DLLs are
 explicitly rejected. The package's unmapped ELOCL.LOC still resolves to that
 core DLL. Runtime installation of arbitrary locale DLL tables is not implemented.
 
-Raw input is a separate follow-up: this branch still parks RequestEvent.
+Raw input uses the EKA1 CaptureEventHook/RequestEvent executive contract. Qt
+and control-socket input enter a kernel FIFO owned by the capturing thread;
+ARM wserv owns key state, translation, repeat and client delivery. Nordic
+keyboard index 6 must match the station X mapping. Adjacent pointer moves
+coalesce; key/button edges remain ordered, with overflow reported at 4096.
+Owner death/reset drops stale requests and events.
+
+The control socket accepts `key <name> [down|up]` and `type <UTF-8 text>`.
+`key` names physical keys (including shift, chr, arrows and F1–F12); `type`
+uses the configured layout's physical combinations. These commands return
+`OK queued ...` and execute in order, one command/character per 30 ms.
+This pacing avoids overrunning ARM wserv's own small client event queue.
+It does not pace external X input. Reset and quit discard pending commands.
+Unicode with no physical combination has no direct ROM character bypass.
+Use EKA2L1_KEYLOG=1 for raw type/tick/scancode/coordinate/completion traces.
+The standalone ARM client in `tools/s80-input-probe` displays pointer events;
+Desk icon selection by pointer remains unproven.
 Guest contract tests are in `tools/s80-rom-boot-test` (same toolchain setup as
 SysState). Run BootContracts.exe and inspect C:\boot-contracts.txt. Host
 regressions cover the clock phase grid and wsini filtering in ekatests.

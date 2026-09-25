@@ -28,6 +28,8 @@
 #include <services/window/window.h>
 
 #include <string>
+#include <system/epoc.h>
+#include <config/config.h>
 
 namespace eka2l1::ldd {
     static const std::string EKEYB_FACTORY_NAME = "EKeyB";
@@ -37,7 +39,7 @@ namespace eka2l1::ldd {
     }
 
     void ekeyb_factory::install() {
-        obj_name = EKEYB_FACTORY_NAME;
+        obj_name = kern->rom_raw_input_enabled() ? "EKeyb" : EKEYB_FACTORY_NAME;
     }
 
     std::unique_ptr<channel> ekeyb_factory::make_channel(epoc::version ver) {
@@ -50,6 +52,21 @@ namespace eka2l1::ldd {
 
     std::int32_t ekeyb_channel::do_control(kernel::thread *r, const std::uint32_t n, const eka2l1::ptr<void> arg1,
         const eka2l1::ptr<void> arg2) {
+        if (kern->rom_raw_input_enabled()) {
+            LOG_INFO(LDD_MMCIF, "ROM EKeyb control {} arg1=0x{:X} arg2=0x{:X}", n, arg1.ptr_address(), arg2.ptr_address());
+            // ROM HAL jump table at 0x500434c8: control 0 = case state,
+            // 2 = keyboard index (HAL 69), 5/6 = mouse speed/acceleration.
+            // All getters take TInt* in arg1.
+            auto *value = reinterpret_cast<std::int32_t *>(arg1.get(r->owning_process()));
+            if (n == 0 || n == 2 || n == 5 || n == 6) {
+                if (!value) return epoc::error_argument;
+                if (n == 2) *value = sys_->get_config()->keyboard_layout_index;
+                else if (n == 0) *value = 0; // RAE-6 HAL default case state
+                else *value = 1; // RAE-6 HAL defaults for mouse speed/acceleration
+                return epoc::error_none;
+            }
+            return epoc::error_not_supported;
+        }
         LOG_TRACE(LDD_MMCIF, "Unimplemented ekeyb control opcode {}", n);
         return 0;
     }
@@ -57,6 +74,10 @@ namespace eka2l1::ldd {
     std::int32_t ekeyb_channel::do_request(epoc::notify_info info, const std::uint32_t n,
         const eka2l1::ptr<void> arg1, const eka2l1::ptr<void> arg2,
         const bool is_supervisor) {
+        if (kern->rom_raw_input_enabled()) {
+            info.complete(epoc::error_not_supported);
+            return epoc::error_none;
+        }
         LOG_TRACE(LDD_MMCIF, "Unimplemented ekeyb request opcode {}", n);
         return 0;
     }
