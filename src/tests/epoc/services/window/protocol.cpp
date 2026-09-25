@@ -9,6 +9,7 @@
  */
 
 #include <catch2/catch.hpp>
+#include <services/window/common.h>
 #include <services/window/protocol.h>
 #include <services/window/framebuffer.h>
 
@@ -53,6 +54,24 @@ TEST_CASE("Series 80 v2 window opcodes decode to the WS32.DLL exports", "[window
     REQUIRE(s80.window_opcode(0x60) == EWsWinOpSendPointerEvent);
     REQUIRE(s80.window_opcode(0x61) == EWsWinOpGetDisplayMode);
     REQUIRE(s80.session_opcode(ws_cl_op_start_custom_text_cursor) == ws_cl_op_start_custom_text_cursor);
+}
+
+TEST_CASE("Series 80 twips survive a round trip through the font server", "[window]") {
+    // S80 DP 2.0: 6259 x 1956 twips for the 640 x 200 panel, 9780 per mille twips a pixel.
+    REQUIRE(eka2l1::vec2(640, 200) * epoc::get_approximate_pixel_to_twips_mul(epocver::epoc7) == eka2l1::vec2(6259, 1956));
+
+    // A pixel height reported in twips and asked for again in twips (get_nearest_font truncates)
+    // must come back as the same pixel height.
+    const float ratio = epoc::get_approximate_pixel_to_twips_mul(epocver::epoc7);
+    for (std::int32_t pixels = 1; pixels <= 256; pixels++) {
+        const std::int32_t twips = epoc::pixels_to_twips(epocver::epoc7, pixels);
+        CAPTURE(pixels, twips);
+        REQUIRE(static_cast<std::int32_t>(static_cast<float>(twips) / ratio) == pixels);
+    }
+
+    // Whole ratios are untouched.
+    REQUIRE(epoc::pixels_to_twips(epocver::epoc80, 16) == 240);
+    REQUIRE(epoc::pixels_to_twips(epocver::epoc94, 16) == 144);
 }
 
 TEST_CASE("Mapped framebuffer tracks writes without a sentinel pixel value", "[window]") {

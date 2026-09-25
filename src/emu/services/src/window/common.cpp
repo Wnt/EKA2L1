@@ -27,6 +27,8 @@
 
 #include <services/window/common.h>
 
+#include <cmath>
+
 namespace eka2l1::epoc {
     // TODO: Use emulated time
     event::event(const std::uint32_t handle, event_code evt_code)
@@ -301,13 +303,20 @@ namespace eka2l1::epoc {
         return it->second;
     }
     
-    int get_approximate_pixel_to_twips_mul(const epocver ver) {
+    float get_approximate_pixel_to_twips_mul(const epocver ver) {
         switch (ver) {
         case epocver::epoc70:
             return 16;
 
-        case epocver::epoc6:
         case epocver::epoc7:
+            // epoc7 is Series 80 v2 only (9300, 9300i, 9500), all with the same 640x200 panel. The S80 DP 2.0
+            // SDK's epoc.ini gives its physical size as 6259 x 1956 twips, and its emulator's clients tell the
+            // font server 9780 per mille twips a pixel (SetPixelHeight 0x2634, 0x2634 on every call of a cold
+            // boot). The generic 15 made every font asked for in twips a third too small: a 10 pt (200 twips)
+            // document font came out 13 px instead of 20.
+            return 9.78f;
+
+        case epocver::epoc6:
         case epocver::epoc80:
         case epocver::epoc81a:
         case epocver::epoc81b:
@@ -324,5 +333,16 @@ namespace eka2l1::epoc {
         }
 
         return 8;
+    }
+
+    std::int32_t pixels_to_twips(const epocver ver, const std::int32_t pixels) {
+        const double twips = static_cast<double>(pixels) * get_approximate_pixel_to_twips_mul(ver);
+
+        if (twips == std::floor(twips)) {
+            return static_cast<std::int32_t>(twips);
+        }
+
+        // Round up past float error: the result divided by the ratio must not land below the pixel count.
+        return static_cast<std::int32_t>(std::ceil(twips + 1e-3));
     }
 }

@@ -409,9 +409,11 @@ namespace eka2l1 {
      * \param adapter             The adapter for the target bitmap font that we will fill the spec.
      */
     static void do_fill_bitmap_font_spec(epoc::font_spec_base &target_spec, epoc::font_spec_base &given_spec,
-        std::int16_t adjusted_height, epoc::adapter::font_file_adapter_base *adapter) {
+        std::int16_t adjusted_height, epoc::adapter::font_file_adapter_base *adapter, const epocver ver) {
         // TODO: Proper conversion through physical screen size
-        target_spec.height = adjusted_height * 15;
+        // Series 80 clients read this back (CFont::FontSpecInTwips) and ask for the font again in twips,
+        // so it has to use the ratio get_nearest_font converts with. Other platforms keep the old 15.
+        target_spec.height = (ver == epocver::epoc7) ? epoc::pixels_to_twips(ver, adjusted_height) : (adjusted_height * 15);
 
         // Set bitmap type that we gonna output
         static_cast<epoc::font_spec_v1 &>(target_spec).style.reset_flags();
@@ -442,8 +444,8 @@ namespace eka2l1 {
         const epocver ver_sym = ctx->sys->get_symbian_version_use();
 
         support.value() = *support_stored;
-        support->min_height_in_twips_ *= epoc::get_approximate_pixel_to_twips_mul(ver_sym);
-        support->max_height_in_twips_ *= epoc::get_approximate_pixel_to_twips_mul(ver_sym);
+        support->min_height_in_twips_ = epoc::pixels_to_twips(ver_sym, support->min_height_in_twips_);
+        support->max_height_in_twips_ = epoc::pixels_to_twips(ver_sym, support->max_height_in_twips_);
 
         ctx->write_data_to_descriptor_argument(1, support.value());
         ctx->complete(epoc::error_none);
@@ -468,7 +470,8 @@ namespace eka2l1 {
         bmpfont->vtable = serv->fntstr_seg->relocate(font_user, serv->bmp_font_vtab.ptr_address());
         calculate_algorithic_style(bmpfont->algorithic_style, spec);
 
-        do_fill_bitmap_font_spec(bmpfont->spec_in_twips, spec, info.metrics.design_height, info.adapter);
+        do_fill_bitmap_font_spec(bmpfont->spec_in_twips, spec, info.metrics.design_height, info.adapter,
+            serv->kern->get_epoc_version());
 
         static constexpr std::uint16_t MAX_TF_NAME = 24;
         bmpfont->spec_in_twips.tf.name.assign(nullptr, info.face_attrib.fam_name.to_std_string(nullptr));
@@ -763,8 +766,8 @@ namespace eka2l1 {
             return;
         }
 
-        const std::int32_t twips_height = static_cast<std::int32_t>(font->of_info.metrics.max_height *
-            epoc::get_approximate_pixel_to_twips_mul(serv->kern->get_epoc_version()));
+        const std::int32_t twips_height = epoc::pixels_to_twips(serv->kern->get_epoc_version(),
+            font->of_info.metrics.max_height);
 
         ctx->write_data_to_descriptor_argument<std::int32_t>(1, twips_height);
         ctx->complete(epoc::error_none);
