@@ -349,6 +349,7 @@ namespace eka2l1::epoc {
         // Runs draw once per blend pass of the current draw mode, with the pass's colour as brush colour.
         void draw_with_mode(const eka2l1::vec4 &color, const std::function<void()> &draw);
         void build_line_geometry(const gdi_store_command_draw_line_data &cmd);
+        void clip_to_region(const common::region &clipped);
 
     public:
         explicit gdi_command_builder(drivers::graphics_driver *drv, drivers::graphics_command_builder &builder, bitmap_cache &bcache,

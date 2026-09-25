@@ -986,10 +986,21 @@ namespace eka2l1::epoc {
         clipped.add_rect(rect_advanced);
         clipped = clipped.intersect(clip_);
 
-        if ((clipped.rects_.size() == 1) && (clipped.rects_[0].size == eka2l1::vec2(1, 1))) {
-            LOG_TRACE(KERNEL, "HI!");
+        clip_to_region(clipped);
+    }
+
+    void gdi_command_builder::clip_to_region(const common::region &clipped) {
+        if (clipped.empty()) {
+            // Nothing of this clip is left inside the area the segment still owns: draw nowhere. Handing the empty
+            // region to clip_bitmap_region changed nothing, so the previous clip stayed in force and the draws after
+            // it painted where this segment is no longer valid (Series 80 Sheet: the column E cell fill of the row
+            // being redrawn went over the grid's right border, which only the older full redraw still owned).
+            builder_.set_feature(drivers::graphics_feature::stencil_test, false);
+            builder_.set_feature(drivers::graphics_feature::clipping, true);
+            builder_.clip_bitmap_rect(eka2l1::rect({ 0, 0 }, { 0, 0 }));
+            return;
         }
-        
+
         builder_.clip_bitmap_region(clipped, scale_factor_);
     }
 
@@ -999,7 +1010,7 @@ namespace eka2l1::epoc {
         clipped.advance(position_);
         clipped = clipped.intersect(clip_);
 
-        builder_.clip_bitmap_region(clipped, scale_factor_);
+        clip_to_region(clipped);
     }
 
     void gdi_command_builder::build_command_disable_clip() {

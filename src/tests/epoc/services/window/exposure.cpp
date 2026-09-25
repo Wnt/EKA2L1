@@ -114,3 +114,52 @@ TEST_CASE("aged_non_redraw_segment_is_erased_with_redraw_storing", "window_expos
     REQUIRE(store.clean_old_nonredraw_segments(false));
     REQUIRE(store.get_segments().size() == 1);
 }
+
+#include <drivers/graphics/graphics.h>
+#include <drivers/itc.h>
+#include <services/window/bitmap_cache.h>
+
+namespace {
+    // The last clip command the builder queued: {opcode, rect}.
+    std::pair<std::uint32_t, eka2l1::rect> last_clip(drivers::graphics_command_builder &builder) {
+        drivers::command_list list = builder.retrieve_command_list();
+        std::pair<std::uint32_t, eka2l1::rect> found{ 0, eka2l1::rect() };
+
+        for (std::size_t i = 0; i < list.size_; i++) {
+            const drivers::command &cmd = list.base_[i];
+            if ((cmd.opcode_ == drivers::graphics_driver_clip_bitmap_rect) || (cmd.opcode_ == drivers::graphics_driver_clip_region)) {
+                found.first = cmd.opcode_;
+                if (cmd.opcode_ == drivers::graphics_driver_clip_bitmap_rect) {
+                    found.second = eka2l1::rect({ static_cast<int>(cmd.data_[0] & 0xFFFFFFFF), static_cast<int>(cmd.data_[0] >> 32) },
+                        { static_cast<int>(cmd.data_[1] & 0xFFFFFFFF), static_cast<int>(cmd.data_[1] >> 32) });
+                }
+            }
+        }
+
+        delete[] list.base_;
+        return found;
+    }
+}
+
+TEST_CASE("clip_outside_the_segment_region_draws_nowhere", "window_exposure") {
+    // A full redraw of the Sheet grid (523x146) that a later redraw of row 3 took over, except for the grid's
+    // right border column: what the segment still owns.
+    common::region owned;
+    owned.add_rect(eka2l1::rect({ 0, 0 }, { 523, 79 }));
+    owned.add_rect(eka2l1::rect({ 0, 108 }, { 523, 38 }));
+    owned.add_rect(eka2l1::rect({ 0, 79 }, { 33, 29 }));
+    owned.add_rect(eka2l1::rect({ 522, 79 }, { 1, 29 }));
+
+    drivers::graphics_command_builder builder;
+    epoc::bitmap_cache cache(nullptr);
+    epoc::gdi_command_builder gdi(nullptr, builder, cache, drivers::filter_option::linear, { 0, 0 }, 1.0f, owned);
+
+    // The column E cell of row 3 clips to (448,82) 74x24, all of it in the part the later redraw owns. The
+    // cell's fill after it must not land on the border column the segment still owns.
+    gdi.build_command_set_clip_rect_single(epoc::gdi_store_command_set_clip_rect_single_data{ eka2l1::rect({ 448, 82 }, { 74, 24 }) });
+
+    const auto clip = last_clip(builder);
+    REQUIRE(clip.first == drivers::graphics_driver_clip_bitmap_rect);
+    REQUIRE(clip.second.size.x == 0);
+    REQUIRE(clip.second.size.y == 0);
+}
