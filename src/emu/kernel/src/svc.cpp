@@ -3837,6 +3837,32 @@ namespace eka2l1::epoc {
         return do_handle_write(kern, create_info, finish_signal, target_thread, h);
     }
 
+    // The EKA1 kernel finds a server by name with a folded (case-insensitive) compare, and
+    // ROM client/server pairs rely on it: the Nokia 9300's random.dll connects to "randsvr",
+    // while the ROM's randsvr.exe registers itself as "RANDSVR" (Contacts panicked
+    // "Randsvr connect" -1 without this). get_by_name() compares exactly, so walk the server
+    // container once more, folded, only when the exact lookup failed.
+    static server_ptr find_server_ignore_case_eka1(kernel_system *kern, const std::string &name) {
+        std::int32_t next = 0;
+
+        while (true) {
+            std::optional<eka2l1::find_handle> info = kern->find_object("*", next, kernel::object_type::server, true);
+
+            if (!info) {
+                return nullptr;
+            }
+
+            std::string the_full_name;
+            info->obj->full_name(the_full_name);
+
+            if (common::compare_ignore_case(the_full_name.c_str(), name.c_str()) == 0) {
+                return reinterpret_cast<server_ptr>(info->obj);
+            }
+
+            next = static_cast<std::int32_t>(info->index);
+        }
+    }
+
     std::int32_t session_create_eka1(kernel_system *kern, const std::uint32_t attribute, epoc::eka1_executor *create_info,
         epoc::request_status *finish_signal, kernel::thread *target_thread) {
         // arg0 = out handle, arg1 = server name, arg2 = async message slot count
@@ -3851,6 +3877,14 @@ namespace eka2l1::epoc {
 
         std::string server_name = common::ucs2_to_utf8(name_des->to_std_string(target_process));
         server_ptr server = kern->get_by_name<service::server>(server_name);
+
+        if (!server) {
+            server = find_server_ignore_case_eka1(kern, server_name);
+
+            if (server) {
+                LOG_TRACE(KERNEL, "Session to server {} matched {} ignoring case", server_name, server->name());
+            }
+        }
 
         if (!server) {
             LOG_TRACE(KERNEL, "Create session to unexist server: {}", server_name);
