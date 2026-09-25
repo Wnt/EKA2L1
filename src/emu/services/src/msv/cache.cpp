@@ -17,6 +17,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
 #include <services/msv/cache.h>
 
 namespace eka2l1::epoc::msv {
@@ -80,7 +81,8 @@ namespace eka2l1::epoc::msv {
         }
 
         if ((ents.size() == 1) || (end_index - start_index == 0)) {
-            return add(ents[0], true);
+            add(ents[start_index], true);
+            return true;
         }
 
         bool no_need_look_too_much = entries_.empty();
@@ -505,7 +507,17 @@ namespace eka2l1::epoc::msv {
                 first = first->next;
             } while (first != end);
 
-            return ents;
+            // Range tables of one folder can overlap after a relocation (an entry that was added
+            // alone first, then again with the full child query), so one id may sit in two of them.
+            // List every child once: a duplicated standard folder stops the 7.0s message centre.
+            std::vector<entry *> unique_ents;
+            for (entry *ent : ents) {
+                if (std::find_if(unique_ents.begin(), unique_ents.end(), [ent](const entry *e) { return e->id_ == ent->id_; }) == unique_ents.end()) {
+                    unique_ents.push_back(ent);
+                }
+            }
+
+            return unique_ents;
         }
 
         // In case not directly belongs
