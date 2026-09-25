@@ -20,6 +20,7 @@
 #include <drivers/input/common.h>
 
 #include <qt/kiosk.h>
+#include <qt/qt_log.h>
 #include <qt/state.h>
 #include <qt/thread.h>
 #include <qt/utils.h>
@@ -84,6 +85,10 @@ int main(int argc, char *argv[]) {
         qputenv("SDL_NO_SIGNAL_HANDLERS", "1");
     }
 #endif
+
+    // Ahead of QApplication on purpose: constructing it loads the platform plugin, and
+    // what Qt has to say when that goes wrong is said once and then the process dies.
+    eka2l1::desktop::install_qt_message_handler();
 
     QApplication a(argc, argv);
 
