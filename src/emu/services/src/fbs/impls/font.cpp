@@ -594,6 +594,26 @@ namespace eka2l1 {
         ctx->complete(epoc::error_none);
     }
 
+    bool fbs_font_object_reusable(const bool vectorizable, const std::uint32_t held_metric_id, const std::uint32_t wanted_metric_id,
+        const std::uint32_t held_style_bits, const std::uint32_t wanted_style_bits, const std::int32_t height_delta) {
+        // The client reads the style back from the font (FontSpecInTwips, the algorithmic baseline), so
+        // requests that differ in it get their own object, as CFontStore::IsFontLoaded compares the spec.
+        if (held_style_bits != wanted_style_bits) {
+            return false;
+        }
+
+        if (vectorizable) {
+            // A scalable face renders any size: a size within one pixel of the request is close enough.
+            static constexpr std::int32_t max_acceptable_delta = 1;
+            return common::abs(height_delta) <= max_acceptable_delta;
+        }
+
+        // A bitmap typeface resolves a request to one of its bitmaps, often of another height than asked for
+        // (Series 80 'System' 15 -> the 10 px bitmap). Reuse the font made for that very bitmap: comparing the
+        // requested height with the bitmap's missed every time and made a new font object per request.
+        return held_metric_id == wanted_metric_id;
+    }
+
     void fbscli::get_nearest_font(service::ipc_context *ctx) {
         std::optional<epoc::font_spec_v1> spec_arg = ctx->get_argument_data_from_descriptor<epoc::font_spec_v1>(0);
         if (!spec_arg) {
@@ -649,8 +669,6 @@ namespace eka2l1 {
             return;
         }
 
-        static constexpr int max_acceptable_delta = 1;
-
         // The style asked for, in face attribute terms: it picks the bitmap inside a GDR typeface.
         std::uint32_t wanted_style = 0;
         if (spec.style.flags & epoc::font_style_base::bold) {
@@ -670,15 +688,22 @@ namespace eka2l1 {
             return;
         }
 
+        const std::uint32_t wanted_spec_style_bits = spec.style.flags & (epoc::font_style_base::bold | epoc::font_style_base::italic
+            | epoc::font_style_base::super | epoc::font_style_base::sub);
+        const bool wanted_vectorizable = ofi_suit->adapter->vectorizable();
+
         for (auto &font_obj : server<fbs_server>()->font_obj_container) {
             fbsfont *the_font = reinterpret_cast<fbsfont *>(font_obj.get());
-            const std::int32_t delta = common::abs(is_design_height ? (spec.height - the_font->of_info.metrics.design_height) : (size_info->x - epoc::font_height_in_pixels(the_font->of_info.metrics, the_font->of_info.adapter->vectorizable())));
 
-            // Same adapter and font size is not to much of a difference. A bitmap typeface holds several
-            // bitmaps of one height (bold, regular), so reuse only the very bitmap this request resolves to.
-            if ((the_font->of_info.face_attrib.name.to_std_string(nullptr) == ofi_suit->face_attrib.name.to_std_string(nullptr))
-                && (delta <= max_acceptable_delta)
-                && (ofi_suit->adapter->vectorizable() || (the_font->of_info.metric_identifier == wanted_metric_identifier))) {
+            if ((the_font->of_info.adapter != ofi_suit->adapter) || (the_font->of_info.idx != ofi_suit->idx)
+                || (the_font->of_info.face_attrib.name.to_std_string(nullptr) != ofi_suit->face_attrib.name.to_std_string(nullptr))) {
+                continue;
+            }
+
+            const std::int32_t height_delta = wanted_vectorizable ? (is_design_height ? (spec.height - the_font->of_info.metrics.design_height) : (size_info->x - epoc::font_height_in_pixels(the_font->of_info.metrics, true))) : 0;
+
+            if (fbs_font_object_reusable(wanted_vectorizable, the_font->of_info.metric_identifier, wanted_metric_identifier,
+                    the_font->spec_style_bits, wanted_spec_style_bits, height_delta)) {
                 font = the_font;
                 break;
             }
@@ -691,6 +716,7 @@ namespace eka2l1 {
             font->of_info = *ofi_suit;
             font->of_info.metrics = wanted_metrics.value();
             font->of_info.metric_identifier = wanted_metric_identifier;
+            font->spec_style_bits = wanted_spec_style_bits;
 
             epoc::bitmapfont_base *bmpfont = create_bitmap_open_font(font->of_info, spec, ctx->msg->own_thr->owning_process());
 
