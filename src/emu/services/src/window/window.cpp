@@ -2023,6 +2023,43 @@ namespace eka2l1 {
     void window_server::handle_input_from_driver(drivers::input_event input_event) {
         epoc::event guest_event;
 
+        if (kern->rom_raw_input_enabled()) {
+            // No guest window tree lives in the host display adapter in ROM mode.
+            // Serialize both translation state and the kernel queue as one batch.
+            kern->lock();
+            if ((input_event.type_ == drivers::input_event_type::key)
+                || (input_event.type_ == drivers::input_event_type::key_raw)) {
+                if (key_translator_ && key_translator_->loaded()) handle_translated_key_input(input_event);
+            } else if (input_event.type_ == drivers::input_event_type::touch) {
+                auto *screen = get_current_focus_screen();
+                make_mouse_event(input_event, guest_event, screen);
+                auto &pos = guest_event.adv_pointer_evt_.pos;
+                if (input_event.mouse_.action_ == drivers::mouse_action_release) {
+                    // A drag that leaves the display must still release its button.
+                    pos.x = std::clamp(pos.x, 0, screen->current_mode().size.x - 1);
+                    pos.y = std::clamp(pos.y, 0, screen->current_mode().size.y - 1);
+                }
+                if (pos.x >= 0 && pos.y >= 0 && pos.x < screen->current_mode().size.x
+                    && pos.y < screen->current_mode().size.y && update_pointer_position(guest_event)) {
+                    epoc::raw_event_eka1 raw{};
+                    raw.type_ = 1; // EPointerMove (also a drag with a held button)
+                    const auto type = guest_event.adv_pointer_evt_.evtype;
+                    if (type == epoc::event_type::button1down) raw.type_ = 10;
+                    else if (type == epoc::event_type::button1up) raw.type_ = 11;
+                    else if (type == epoc::event_type::button2down) raw.type_ = 12;
+                    else if (type == epoc::event_type::button2up) raw.type_ = 13;
+                    else if (type == epoc::event_type::button3down) raw.type_ = 14;
+                    else if (type == epoc::event_type::button3up) raw.type_ = 15;
+                    raw.time_in_ticks_ = (kern->get_ntimer()->microseconds() / 15625) & ~1U;
+                    raw.data_.pos_.x_ = pos.x;
+                    raw.data_.pos_.y_ = pos.y;
+                    if (kern->add_raw_event(raw) != epoc::error_none) LOG_ERROR(SERVICE_WINDOW, "ROM raw pointer queue overflow");
+                }
+            }
+            kern->unlock();
+            return;
+        }
+
         epoc::window *root_current = get_current_focus_screen()->root->child;
         guest_event.time = kern->universal_time();
 
@@ -2927,6 +2964,18 @@ namespace eka2l1 {
         guest_event.key_evt_.repeats = 0;
         guest_event.key_evt_.modifiers = key_translator_->modifier_state();
 
+        if (kern->rom_raw_input_enabled()) {
+            // Host translation only chooses physical keys and tracks modifiers.
+            // ARM wserv owns character translation, capture, focus and repeats.
+            const auto res = key_translator_->translate(scancode, key_up);
+            epoc::raw_event_eka1 raw{};
+            raw.type_ = key_up ? 4 : 3;
+            raw.time_in_ticks_ = (kern->get_ntimer()->microseconds() / 15625) & ~1U;
+            raw.data_.scancode_ = scancode;
+            if (kern->add_raw_event(raw) != epoc::error_none) LOG_ERROR(SERVICE_WINDOW, "ROM raw key queue overflow");
+            return res;
+        }
+
         // The application buttons belong to the shell unless a guest captured them.
         if (sys->is_s80_device_active() && s80_handle_app_key(guest_event)) {
             return epoc::key_translator::result{};
@@ -2955,6 +3004,10 @@ namespace eka2l1 {
 
     void window_server::ship_key_by_character(const std::uint32_t scancode, const std::uint32_t code,
         const std::uint32_t modifiers, const bool key_up) {
+        if (kern->rom_raw_input_enabled()) {
+            LOG_WARN(SERVICE_WINDOW, "Character U+{:04X} has no physical key in the ROM keyboard layout", code);
+            return;
+        }
         epoc::event guest_event;
         guest_event.time = kern->universal_time();
         guest_event.type = key_up ? epoc::event_code::key_up : epoc::event_code::key_down;
