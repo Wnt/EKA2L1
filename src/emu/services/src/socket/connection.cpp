@@ -285,6 +285,9 @@ namespace eka2l1::epoc::socket {
     static constexpr std::uint32_t EKA1_HOST_IAP = 1;
     static constexpr std::uint32_t EKA1_HOST_NETWORK = 1;
     static constexpr std::uint32_t EKA1_HOST_SERVICE = 1;
+    // The 9300 ROM's own CommDB already has two LAN bearer records (WLAN, RNDIS) as 1 and 2,
+    // so the host access point's bearer record is 3, not 1 (verified against the real database).
+    static constexpr std::uint32_t EKA1_HOST_BEARER = 3;
     static const std::u16string EKA1_HOST_IAP_NAME = u"Host network";
     static const std::u16string EKA1_HOST_SERVICE_TYPE = u"LANService";
     static const std::u16string EKA1_HOST_BEARER_TYPE = u"LANBearer";
@@ -389,8 +392,10 @@ namespace eka2l1::epoc::socket {
             const auto value = name == u"IAP\\Id" ? state->info.iap_id : state->info.network_id;
             ctx->complete(ctx->write_data_to_descriptor_argument(1, value) ? epoc::error_none : epoc::error_argument);
         } else if (is_eka1_commdb(ctx) && (name == u"IAP\\IAPService" || name == u"IAP\\IAPBearer")) {
-            // The host access point's service and bearer records (LANService 1, LANBearer 1).
-            ctx->complete(ctx->write_data_to_descriptor_argument(1, EKA1_HOST_SERVICE) ? epoc::error_none : epoc::error_argument);
+            // The host access point's service and bearer records: LANService is record 1,
+            // LANBearer is record 3 (the ROM's CommDB already has WLAN and RNDIS as 1 and 2).
+            const std::uint32_t value = (name == u"IAP\\IAPBearer") ? EKA1_HOST_BEARER : EKA1_HOST_SERVICE;
+            ctx->complete(ctx->write_data_to_descriptor_argument(1, value) ? epoc::error_none : epoc::error_argument);
         } else {
             LOG_TRACE(SERVICE_ESOCK, "RConnection::GetIntSetting({}) not served", name ? common::ucs2_to_utf8(*name) : "?");
             ctx->complete(epoc::error_not_found);
