@@ -29,6 +29,7 @@
 #include <common/algorithm.h>
 
 #include <algorithm>
+#include <functional>
 
 namespace eka2l1::epoc {
     // NOTE: Must store objects then free ref with local font atlas.
@@ -203,6 +204,58 @@ namespace eka2l1::epoc {
         current_segment_ = nullptr;
     }
 
+    std::uint32_t gdi_expand_draw_mode(const std::uint32_t mode, eka2l1::vec4 &color, gdi_draw_mode_pass *passes) {
+        const auto invert = [](const eka2l1::vec4 &c) {
+            return eka2l1::vec4(255 - c.x, 255 - c.y, 255 - c.z, c.w);
+        };
+
+        const std::uint32_t logical_op = mode & gdi_draw_mode_logical_op;
+        const bool invert_screen = (mode & gdi_draw_mode_invert_screen) != 0;
+
+        if (mode & gdi_draw_mode_invert_pen) {
+            color = invert(color);
+        }
+
+        if (logical_op == 0) {
+            if (!invert_screen || (mode & gdi_draw_mode_pen)) {
+                // PEN, NOTPEN, WriteAlpha: the (possibly inverted) colour replaces the pixel.
+                return 0;
+            }
+
+            // NOTSCREEN: every covered pixel becomes its inverse, whatever the colour.
+            passes[0] = { eka2l1::vec4(255, 255, 255, 255), drivers::blend_factor::one_minus_current_color, drivers::blend_factor::zero };
+            return 1;
+        }
+
+        const eka2l1::vec4 opaque(color.x, color.y, color.z, 255);
+
+        if (logical_op & gdi_draw_mode_xor) {
+            // S ^ D, and ~D ^ S == ~S ^ D.
+            passes[0] = { invert_screen ? invert(opaque) : opaque, drivers::blend_factor::one_minus_current_color,
+                drivers::blend_factor::one_minus_frag_out_color };
+            return 1;
+        }
+
+        if (logical_op & gdi_draw_mode_and) {
+            // S & D, or S & ~D.
+            passes[0] = { opaque, invert_screen ? drivers::blend_factor::one_minus_current_color : drivers::blend_factor::current_color,
+                drivers::blend_factor::zero };
+            return 1;
+        }
+
+        // OR
+        if (!invert_screen) {
+            // S | D = S * (1 - D) + D
+            passes[0] = { opaque, drivers::blend_factor::one_minus_current_color, drivers::blend_factor::one };
+            return 1;
+        }
+
+        // S | ~D = ~(~S & D): AND with the inverted colour, then invert the screen.
+        passes[0] = { invert(opaque), drivers::blend_factor::current_color, drivers::blend_factor::zero };
+        passes[1] = { eka2l1::vec4(255, 255, 255, 255), drivers::blend_factor::one_minus_current_color, drivers::blend_factor::zero };
+        return 2;
+    }
+
     gdi_command_builder::gdi_command_builder(drivers::graphics_driver *drv, drivers::graphics_command_builder &builder, bitmap_cache &bcache,
         drivers::filter_option texture_filter, const eka2l1::vec2 &position, float scale_factor, const common::region &clip, bool premultiplied_target)
         : driver_(drv)
@@ -216,6 +269,9 @@ namespace eka2l1::epoc {
     }
 
     void gdi_command_builder::build_segment(const gdi_store_command_segment &segment) {
+        // A segment's recording starts in PEN mode; the graphics context brackets every moded draw.
+        draw_mode_ = gdi_draw_mode_pen;
+
         for (std::size_t i = 0; i < segment.commands_.size(); i++) {
             build_single_command(segment.commands_[i]);
         }
@@ -274,6 +330,10 @@ namespace eka2l1::epoc {
             build_command_update_texture(command.get_data_struct_const<gdi_store_command_update_texture_data>());
             break;
 
+        case gdi_store_command_set_draw_mode:
+            draw_mode_ = command.get_data_struct_const<gdi_store_command_set_draw_mode_data>().mode_;
+            break;
+
         default:
             break;
         }
@@ -285,15 +345,52 @@ namespace eka2l1::epoc {
 
         scale_rectangle(scaled_rect, scale_factor_);
 
-        builder_.set_brush_color_detail(cmd.color_);
-        builder_.draw_rectangle(scaled_rect);
+        draw_with_mode(cmd.color_, [&]() {
+            builder_.draw_rectangle(scaled_rect);
+        });
+    }
+
+    void gdi_command_builder::draw_with_mode(const eka2l1::vec4 &color, const std::function<void()> &draw) {
+        eka2l1::vec4 plain_color = color;
+        gdi_draw_mode_pass passes[2];
+        const std::uint32_t pass_count = gdi_expand_draw_mode(draw_mode_, plain_color, passes);
+
+        if (pass_count == 0) {
+            builder_.set_brush_color_detail(plain_color);
+            draw();
+            return;
+        }
+
+        builder_.set_feature(drivers::graphics_feature::blend, true);
+
+        for (std::uint32_t i = 0; i < pass_count; i++) {
+            // The target's alpha (coverage of a retained window) is left as it is.
+            builder_.blend_formula(drivers::blend_equation::add, drivers::blend_equation::add,
+                passes[i].src_factor_, passes[i].dst_factor_, drivers::blend_factor::zero, drivers::blend_factor::one);
+            builder_.set_brush_color_detail(passes[i].color_);
+            draw();
+        }
+
+        // Back to what build_single_command set up for plain drawing.
+        if (premultiplied_target_) {
+            builder_.blend_formula(drivers::blend_equation::add, drivers::blend_equation::add,
+                drivers::blend_factor::frag_out_alpha, drivers::blend_factor::zero,
+                drivers::blend_factor::one, drivers::blend_factor::zero);
+        } else {
+            builder_.set_feature(drivers::graphics_feature::blend, false);
+        }
     }
 
     void gdi_command_builder::build_command_draw_line(const gdi_store_command_draw_line_data &cmd) {
+        draw_with_mode(cmd.color_, [&]() {
+            build_line_geometry(cmd);
+        });
+    }
+
+    void gdi_command_builder::build_line_geometry(const gdi_store_command_draw_line_data &cmd) {
         eka2l1::point scaled_start = (cmd.start_ + position_) * scale_factor_;
         eka2l1::point scaled_end = (cmd.end_ + position_) * scale_factor_;
 
-        builder_.set_brush_color_detail(cmd.color_);
 
         // Trying to emulate brush size here. There's more complexity in adding a real variant.
         if (cmd.style_ == drivers::pen_style_solid) {
@@ -326,9 +423,10 @@ namespace eka2l1::epoc {
             copied_points[i] = (cmd.points_[i] + position_) * scale_factor_;
         }
 
-        builder_.set_brush_color_detail(cmd.color_);
-        builder_.set_pen_style(cmd.style_);
-        builder_.draw_polygons(copied_points.data(), cmd.point_count_);
+        draw_with_mode(cmd.color_, [&]() {
+            builder_.set_pen_style(cmd.style_);
+            builder_.draw_polygons(copied_points.data(), cmd.point_count_);
+        });
     }
 
     void gdi_command_builder::build_command_draw_text(const gdi_store_command_draw_text_data &cmd) {

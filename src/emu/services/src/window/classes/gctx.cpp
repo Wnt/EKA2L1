@@ -240,7 +240,7 @@ namespace eka2l1::epoc {
         fill_data.color_ = color_brush;
         fill_cmd.opcode_ = epoc::gdi_store_command_draw_rect;
 
-        attached_window->add_draw_command(fill_cmd);
+        add_moded_draw_command(fill_cmd);
         return true;
     }
 
@@ -672,7 +672,7 @@ namespace eka2l1::epoc {
             draw_line_data.end_ = end;
             draw_line_data.pen_size_ = pen_size;
 
-            attached_window->add_draw_command(cmd);
+            add_moded_draw_command(cmd);
         }
     }
 
@@ -774,7 +774,7 @@ namespace eka2l1::epoc {
 
             std::memcpy(cmd_data.points_, point_list, 5 * sizeof(eka2l1::point));
 
-            attached_window->add_draw_command(gdi_cmd);
+            add_moded_draw_command(gdi_cmd);
         }
 
         context.complete(epoc::error_none);
@@ -799,7 +799,7 @@ namespace eka2l1::epoc {
             rect_draw_data.color_.w = 255;
         }
 
-        attached_window->add_draw_command(gdi_cmd);
+        add_moded_draw_command(gdi_cmd);
 
         // Draw rectangle
         context.complete(epoc::error_none);
@@ -827,7 +827,7 @@ namespace eka2l1::epoc {
             rect_draw_data.color_.w = 255;
         }
         
-        attached_window->add_draw_command(gdi_cmd);
+        add_moded_draw_command(gdi_cmd);
 
         // Draw rectangle
         context.complete(epoc::error_none);
@@ -848,7 +848,7 @@ namespace eka2l1::epoc {
             rect_draw_data.color_.w = 255;
         }
         
-        attached_window->add_draw_command(gdi_cmd);
+        add_moded_draw_command(gdi_cmd);
         context.complete(epoc::error_none);
     }
 
@@ -870,6 +870,7 @@ namespace eka2l1::epoc {
 
         underline = false;
         strikethrough = false;
+        draw_mode = epoc::gdi_draw_mode_pen;
 
         clipping_rect.make_empty();
         clipping_region.make_empty();
@@ -914,8 +915,29 @@ namespace eka2l1::epoc {
     }
     
     void graphic_context::set_draw_mode(service::ipc_context &context, ws_cmd &cmd) {
-        // Not easy to implement under hardware acceleration, ignore for now
+        // CGraphicsContext::TDrawMode. It applies to the pen and brush draws (rect fills and outlines,
+        // lines, plots, Clear), which the gstore replays with blending (gdi_expand_draw_mode).
+        draw_mode = *reinterpret_cast<std::uint32_t *>(cmd.data_ptr);
         context.complete(epoc::error_none);
+    }
+
+    void graphic_context::add_moded_draw_command(epoc::gdi_store_command &cmd) {
+        if ((draw_mode == epoc::gdi_draw_mode_pen) || !epoc::gdi_store_command_draws_pixels(cmd.opcode_)) {
+            attached_window->add_draw_command(cmd);
+            return;
+        }
+
+        // Bracket the draw so every stored segment still starts and ends in PEN mode: segments are
+        // replayed, aged out and rebuilt independently of each other.
+        epoc::gdi_store_command mode_cmd;
+        mode_cmd.opcode_ = epoc::gdi_store_command_set_draw_mode;
+        mode_cmd.get_data_struct<epoc::gdi_store_command_set_draw_mode_data>().mode_ = draw_mode;
+        attached_window->add_draw_command(mode_cmd);
+
+        attached_window->add_draw_command(cmd);
+
+        mode_cmd.get_data_struct<epoc::gdi_store_command_set_draw_mode_data>().mode_ = epoc::gdi_draw_mode_pen;
+        attached_window->add_draw_command(mode_cmd);
     }
 
     void graphic_context::draw_text(service::ipc_context &context, ws_cmd &cmd) {

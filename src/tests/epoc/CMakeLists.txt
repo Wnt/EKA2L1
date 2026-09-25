@@ -38,6 +38,7 @@ set(CORE_TEST_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/clock.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/fifo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/redraw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/services/window/draw_mode.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fs_root.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/centralrepo/crebinloader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/domain/domain.cpp
