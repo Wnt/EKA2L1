@@ -174,8 +174,46 @@ bool display_widget::cursor_visiblity() {
     return true;
 }
 
+bool display_widget::is_host_repeat(QKeyEvent *event, const bool pressed) {
+    // A real host auto-repeat starts after the X repeat delay (hundreds of ms). An "auto-repeat" pair
+    // that arrives sooner after the key went down is the same key typed again quickly.
+    static constexpr std::uint64_t RETYPE_WINDOW_MS = 150;
+
+    const std::uint32_t id = event->nativeScanCode() ? event->nativeScanCode() : static_cast<std::uint32_t>(event->key());
+    const std::uint64_t now = event->timestamp();
+
+    if (!event->isAutoRepeat()) {
+        if (pressed) {
+            key_press_time_[id] = now;
+        } else {
+            key_press_time_.erase(id);
+            retyped_keys_.erase(id);
+        }
+
+        return false;
+    }
+
+    if (pressed) {
+        if (retyped_keys_.erase(id)) {
+            key_press_time_[id] = now;
+            return false;
+        }
+
+        return true;
+    }
+
+    auto pressed_at = key_press_time_.find(id);
+
+    if ((pressed_at != key_press_time_.end()) && (now >= pressed_at->second) && (now - pressed_at->second < RETYPE_WINDOW_MS)) {
+        retyped_keys_.insert(id);
+        return false;
+    }
+
+    return true;
+}
+
 void display_widget::keyPressEvent(QKeyEvent *event) {
-    if (event->isAutoRepeat()) {
+    if (is_host_repeat(event, true)) {
         return;
     }
 
@@ -201,7 +239,7 @@ bool display_widget::focusNextPrevChild(bool next) {
 }
 
 void display_widget::keyReleaseEvent(QKeyEvent *event) {
-    if (event->isAutoRepeat()) {
+    if (is_host_repeat(event, false)) {
         return;
     }
 
