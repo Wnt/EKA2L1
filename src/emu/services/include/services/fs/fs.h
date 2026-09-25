@@ -100,6 +100,14 @@ namespace eka2l1 {
     };
 
     std::u16string get_full_symbian_path(const std::u16string &session_path, const std::u16string &target_path);
+
+    /**
+     * \brief Check if a full Symbian path names only a drive's root directory ("C:" or "C:\").
+     *
+     * The real file server has no entry for a root directory, so Entry/SetEntry (RFs::Att/SetAtt) on it
+     * fail with KErrBadName.
+     */
+    bool is_drive_root_path(const std::u16string &path);
     bool check_path_capabilities_pass(const std::u16string &path, kernel::process *pr, epoc::security_policy &private_policy, epoc::security_policy &sys_policy, epoc::security_policy &resource_policy);
 
     struct fs_server_client : public service::typical_session {
