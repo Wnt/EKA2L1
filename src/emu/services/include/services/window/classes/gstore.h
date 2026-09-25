@@ -233,6 +233,10 @@ namespace eka2l1::epoc {
         common::region region_;
         std::vector<gdi_store_command> commands_;
 
+        // A non-redraw segment past its age or count limit whose window was invalidated so the client
+        // redraws it; it is still replayed until that redraw replaces it (see clean_old_nonredraw_segments).
+        bool superseded_ = false;
+
         std::vector<void*> font_objects_;
         std::vector<void*> bitmap_objects_;
 
@@ -259,14 +263,24 @@ namespace eka2l1::epoc {
         static constexpr std::uint32_t LIMIT_NON_REDRAW_SEGMENTS = 20;
         static constexpr std::int32_t KEEP_NON_REDRAW_SEGMENTS = 12;
         static constexpr std::uint64_t AGE_LIMIT_NONREDRAW_US = 1000000;
+        static constexpr std::size_t LIMIT_SUPERSEDED_SEGMENTS = 64;
 
         explicit gdi_store_command_collection();
 
         gdi_store_command_segment *add_new_segment(const eka2l1::rect &draw_rect, const gdi_store_command_segment_type type_);
         void promote_last_segment();
         
-        // Returns true if this must cause an invalidation
-        bool clean_old_nonredraw_segments();
+        /**
+         * \brief Retire non-redraw segments past the count or age limit.
+         *
+         * \param keep_until_redraw  Keep them and only mark them superseded, for a window server without redraw
+         *                           storing (Symbian OS 8.1b and older). There the client drew those pixels once,
+         *                           outside any redraw, and expects them to stay: erasing the segments erased the
+         *                           drawing (a Series 80 menu pane lost the un-highlight of the item it left). They
+         *                           are dropped when the client's redraw of the whole window replaces them.
+         * \returns True if this must cause an invalidation of the whole window.
+         */
+        bool clean_old_nonredraw_segments(const bool keep_until_redraw = false);
         void redraw_done();
 
         gdi_store_command_segment *get_current_segment() const {

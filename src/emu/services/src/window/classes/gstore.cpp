@@ -159,14 +159,18 @@ namespace eka2l1::epoc {
         lastest_segment->type_ = gdi_store_command_segment_redraw;
     }
 
-    bool gdi_store_command_collection::clean_old_nonredraw_segments() {
+    bool gdi_store_command_collection::clean_old_nonredraw_segments(const bool keep_until_redraw) {
         if (segments_.empty()) {
             return false;
         }
 
+        const auto live_non_redraw = [](const gdi_store_command_segment *seg) {
+            return (seg->type_ == gdi_store_command_segment_non_redraw) && !seg->superseded_;
+        };
+
         std::uint32_t non_redraw_segment_count = 0;
         for (std::size_t i = 0; i < segments_.size(); i++) {
-            if (segments_[i]->type_ == gdi_store_command_segment_non_redraw) {
+            if (live_non_redraw(segments_[i].get())) {
                 non_redraw_segment_count++;
             }
         }
@@ -174,16 +178,29 @@ namespace eka2l1::epoc {
         // If we managed to clean out some old non-redraw segments, we gotta invalidate all the window
         // Because some non-redraw segment may need to stay there.
         bool need_invalidate = false;
+        bool retired_any = false;
         std::int32_t left_to_keep = KEEP_NON_REDRAW_SEGMENTS;
 
+        // Erase the segment at i, or with keep_until_redraw mark it; returns the next index to look at.
+        const auto retire = [&](const std::size_t i) -> std::size_t {
+            retired_any = true;
+            if (keep_until_redraw) {
+                segments_[i]->superseded_ = true;
+                return i + 1;
+            }
+
+            segments_.erase(segments_.begin() + i);
+            return i;
+        };
+
         if (non_redraw_segment_count > LIMIT_NON_REDRAW_SEGMENTS) {
-            for (std::int32_t i = 0; i < static_cast<std::int32_t>(segments_.size()); ) {
-                if ((segments_[i].get() != current_segment_) && (segments_[i]->type_ == gdi_store_command_segment_non_redraw)) {
+            for (std::size_t i = 0; i < segments_.size(); ) {
+                if ((segments_[i].get() != current_segment_) && live_non_redraw(segments_[i].get())) {
                     if (left_to_keep-- > 0) {
                         i++;
                         continue;
                     } else {
-                        segments_.erase(segments_.begin() + i);
+                        i = retire(i);
                         need_invalidate = true;
                     }
                 } else {
@@ -199,9 +216,9 @@ namespace eka2l1::epoc {
             if (current_time - current_segment_->creation_date_ > AGE_LIMIT_NONREDRAW_US) {
                 // Try to find older segments
                 for (std::size_t i = 0; i < segments_.size(); ) {
-                    if ((segments_[i].get() != current_segment_) && (segments_[i]->type_ == gdi_store_command_segment_non_redraw)) {
+                    if ((segments_[i].get() != current_segment_) && live_non_redraw(segments_[i].get())) {
                         if ((current_time - segments_[i]->creation_date_) > AGE_LIMIT_NONREDRAW_US * 2) {
-                            segments_.erase(segments_.begin() + i);
+                            i = retire(i);
                         } else {
                             i++;
                         }
@@ -215,6 +232,27 @@ namespace eka2l1::epoc {
 
                 need_invalidate = true;
             }
+        }
+
+        if (keep_until_redraw) {
+            // A client that never answers the redraw must not grow the store without bound: past the cap the
+            // oldest superseded segments go, as they did before.
+            std::size_t superseded_count = 0;
+            for (std::size_t i = 0; i < segments_.size(); i++) {
+                superseded_count += segments_[i]->superseded_ ? 1 : 0;
+            }
+
+            for (std::size_t i = 0; (i < segments_.size()) && (superseded_count > LIMIT_SUPERSEDED_SEGMENTS); ) {
+                if (segments_[i]->superseded_) {
+                    segments_.erase(segments_.begin() + i);
+                    superseded_count--;
+                } else {
+                    i++;
+                }
+            }
+
+            // Kept segments only need the client's redraw when one was actually retired.
+            return retired_any;
         }
 
         return need_invalidate;

@@ -1512,13 +1512,13 @@ namespace eka2l1::epoc {
 
             // Not in redraw? Try to cleanup non redraw segments to make ways
             const std::size_t segs_before = redraw_segments_.get_segments().size();
-            if (redraw_segments_.clean_old_nonredraw_segments()) {
+            // Without redraw storing the client never expects to redraw what it drew outside a redraw, so
+            // an aged segment is kept (still replayed) until the redraw asked for here replaces it.
+            if (redraw_segments_.clean_old_nonredraw_segments(client->get_ws().no_redraw_storing_enabled())) {
                 if (seg_trace_enabled()) {
                     LOG_WARN(SERVICE_WINDOW, "SEGTRACE win 0x{:X} clean_old_nonredraw {} -> {} segs", id, segs_before, redraw_segments_.get_segments().size());
                 }
-                // With no redraw store, segments aging is ineffective. So just ignore...
-                if (!client->get_ws().no_redraw_storing_enabled())
-                    invalidate(full_size_rect);
+                invalidate(full_size_rect);
             }
 
             gdi_store_command_segment *current_segment = redraw_segments_.get_current_segment();
