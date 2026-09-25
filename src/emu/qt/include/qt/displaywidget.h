@@ -25,6 +25,9 @@
 
 #include <drivers/graphics/emu_window.h>
 
+#include <unordered_map>
+#include <unordered_set>
+
 class display_window_widget;
 
 class display_widget : public QWidget, public eka2l1::drivers::emu_window {
@@ -34,7 +37,14 @@ private:
     std::array<int, eka2l1::MAX_SYMBIAN_SUPPORTED_POINTERS> active_pointers_;
     void *userdata_;
 
+    // Qt calls a key release "auto-repeat" when a press of the same key with the same X timestamp is
+    // already queued behind it, so a letter typed twice within one millisecond (XTEST injection) would
+    // be dropped as a host repeat. Such a pair right after the key's press is a real keystroke.
+    std::unordered_map<std::uint32_t, std::uint64_t> key_press_time_;
+    std::unordered_set<std::uint32_t> retyped_keys_;
+
     void reset_active_pointers();
+    bool is_host_repeat(QKeyEvent *event, const bool pressed);
 
 public:
     explicit display_widget(QWidget *parent = nullptr);

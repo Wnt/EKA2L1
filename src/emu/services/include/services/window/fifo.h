@@ -180,17 +180,22 @@ namespace eka2l1::epoc {
 
         /*! \brief Purge some events on the queue.
          *
-         * When the queue reached the maximum declared, it will purge some
-         * events (if the condition is met) to free space for other events to be
-         * queued.
+         * When the queue reached the maximum declared, it purges one event that
+         * can go (see fifo.cpp) to free space for the next one.
+         *
+         * \returns false if nothing in the queue may be purged.
          * 
          * On hardware, this is to prevent memory being wasted due to no users
          * requests a notification for a long time. We should do this too, there 
          * is no reason not to do it.
         */
-        void do_purge();
+        bool do_purge();
 
     public:
+        /*! Past the nominal size the queue keeps growing for events that must not be purged (keys),
+         *  up to this many; only an app that stopped reading its events gets there. */
+        static constexpr std::size_t hard_maximum_element = 4096;
+
         event_fifo()
             : base_fifo<event>() {}
 
