@@ -5,3 +5,6 @@ inrom
 
 [epoc6]
 1 27
+
+[epoc7]
+1 153     ; CCommsDatabase::NewL() - NewL(TCommDbDatabaseType) at ordinal 27 wraps it

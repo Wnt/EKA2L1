@@ -374,6 +374,10 @@ namespace eka2l1::hle {
         case epocver::epoc70:
             return "v6";
 
+        // Symbian OS 7.0s (Series 80 v2, S60 2nd Edition) is not 6.1: its CommDB schema differs, so it has its own builds.
+        case epocver::epoc7:
+            return "v7";
+
         case epocver::epoc81b:
             return "v81b";
 
