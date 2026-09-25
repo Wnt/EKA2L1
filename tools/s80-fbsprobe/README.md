@@ -34,6 +34,16 @@ and the ROM window server's redraw store. It is a distinct diagnostic: direct
 panel success does not imply this path succeeds. The direct image may later be
 overwritten by Wserv.
 
-The final probe also logs loading bitmap 2 from the embedded store at offset 0x4c
-of the stock Nokia 9300 desk.aif. This extracted ROM-format asset exposes the
-unmapped-ROM-bitmap wall in full ROM FBS mode (KErrCorrupt), independently of Desk.
+The probe checks IsFileInRom, ESeekAddress and User::IsRomAddress for the stock
+Nokia 9300 desk.aif, then loads bitmap 2 from its embedded store at offset 0x4c.
+It closes the file and duplicates the loaded bitmap before drawing it. Full ROM
+FBS requires the extracted ROM store to have stable, globally readable backing.
+
+The canvas is explicitly assigned a physical size using the panel's pixels-to-twips
+conversion. ROM bitmap Create leaves its twips size zero; DrawBitmap(TPoint) uses
+that size and therefore draws nothing without SetSizeInTwips. BitBlt uses pixels,
+so a successful direct-panel test alone does not diagnose a sharing defect.
+
+Add `aa` to the guest argument (for example `window aa`) to explicitly request
+antialiased glyphs. Actual returned bitmap types and metrics are logged; bitmap
+fonts may still return monochrome. Default requests leave the choice to ROM FBS.

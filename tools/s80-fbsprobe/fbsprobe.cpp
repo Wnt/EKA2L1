@@ -7,6 +7,7 @@
 #include <bitdev.h>
 #include <bitstd.h>
 #include <w32std.h>
+#include <f32file.h>
 
 LOCAL_C void ConnectFbsL() {
     TInt err = RFbsSession::Connect();
@@ -39,6 +40,9 @@ LOCAL_C void RunL() {
     opened.Close();
     if (opened.Open(_L("Z4_NoSuchProcess")) != KErrNotFound) User::Leave(KErrCorrupt);
     RDebug::Print(_L("FBSPROBE process open by name PASS"));
+    TBuf<32> arguments;
+    self.CommandLine(arguments);
+    const TBool antialiased = arguments.FindF(_L("aa")) >= 0;
     ConnectFbsL();
     RDebug::Print(_L("FBSPROBE connected"));
     RWsSession ws;
@@ -47,6 +51,11 @@ LOCAL_C void RunL() {
     CFbsScreenDevice* screen = CFbsScreenDevice::NewL(_L(""), EColor64K);
     CFbsBitmap canvas;
     User::LeaveIfError(canvas.Create(TSize(640,200), EColor64K));
+    const TSize initialTwips = canvas.SizeInTwips();
+    RDebug::Print(_L("FBSPROBE initial canvas twips=%dx%d"), initialTwips.iWidth, initialTwips.iHeight);
+    // DrawBitmap(TPoint) uses the bitmap's physical size. ROM Create leaves
+    // twips zero; BitBlt (the direct probe) uses pixels and hid this error.
+    canvas.SetSizeInTwips(TSize(screen->HorizontalPixelsToTwips(640), screen->VerticalPixelsToTwips(200)));
     CFbsBitmapDevice* canvasDevice = CFbsBitmapDevice::NewL(&canvas);
     CFbsBitGc* gc = 0;
     User::LeaveIfError(canvasDevice->CreateContext(gc));
@@ -57,6 +66,7 @@ LOCAL_C void RunL() {
     for (TInt i=0; i<3; ++i) {
         TFontSpec spec(names[i], 18);
         if (i==2) spec.iFontStyle.SetStrokeWeight(EStrokeWeightBold);
+        if (antialiased) spec.iFontStyle.SetBitmapType(EAntiAliasedGlyphBitmap);
         CFont* font = 0;
         User::LeaveIfError(screen->GetNearestFontInPixels(font, spec));
         RDebug::Print(_L("FBSPROBE font %d height=%d ascent=%d width=%d"), i,
@@ -101,14 +111,32 @@ LOCAL_C void RunL() {
     TInt loaded = rom.Load(_L("Z:\\system\\data\\splashscreen.mbm"), 0);
     RDebug::Print(_L("FBSPROBE ROM MBM load=%d size=%dx%d"), loaded, rom.SizeInPixels().iWidth, rom.SizeInPixels().iHeight);
     if (loaded==KErrNone) gc->DrawBitmap(TRect(360,100,520,180), &rom);
+    RFs files;
+    User::LeaveIfError(files.Connect());
+    TUint8* address = files.IsFileInRom(_L("Z:\\System\\Apps\\desk\\desk.aif"));
+    RFile file;
+    User::LeaveIfError(file.Open(files, _L("Z:\\System\\Apps\\desk\\desk.aif"), EFileRead));
+    TInt seek = 0x4c;
+    TInt seekResult = file.Seek(ESeekAddress, seek);
+    file.Close();
+    TBool inRom = EFalse;
+    User::IsRomAddress(inRom, address);
+    RDebug::Print(_L("FBSPROBE file ROM=%x seekResult=%d seek=%x UserIsRom=%d"), address, seekResult, seek, inRom);
+    if (address && (seekResult != KErrNone || (TUint)seek != (TUint)address + 0x4c || !inRom)) User::Leave(KErrCorrupt);
+    files.Close();
     CFbsBitmap extracted;
     TInt extractedResult = extracted.Load(_L("Z:\\System\\Apps\\desk\\desk.aif"), 2, ETrue, 0x4c);
     RDebug::Print(_L("FBSPROBE extracted ROM-format AIF load=%d"), extractedResult);
-    TBuf<32> arguments;
-    self.CommandLine(arguments);
+    if (extractedResult == KErrNone) {
+        CFbsBitmap iconCopy;
+        TInt copied = iconCopy.Duplicate(extracted.Handle());
+        extracted.Reset();
+        RDebug::Print(_L("FBSPROBE extracted duplicate after file close=%d"), copied);
+        if (copied == KErrNone) gc->BitBlt(TPoint(560,112), &iconCopy);
+    }
     RWindowGroup group(ws);
     RWindow window(ws);
-    if (arguments.CompareF(_L("window")) == 0) {
+    if (arguments.FindF(_L("window")) >= 0) {
         // Keep the completed image in a real window's redraw store. A direct panel
         // scribble can be erased by the ROM window server's later background paint.
         CWsScreenDevice* wsScreen = new(ELeave) CWsScreenDevice(ws);
@@ -135,6 +163,7 @@ LOCAL_C void RunL() {
         screenGc->BitBlt(TPoint(0,0), &canvas);
         screen->Update();
     }
+    RDebug::Print(_L("FBSPROBE canvas handle=%x data=%x size=%dx%d"), canvas.Handle(), canvas.DataAddress(), canvas.SizeInPixels().iWidth, canvas.SizeInPixels().iHeight);
     RDebug::Print(_L("FBSPROBE painted"));
     FOREVER { User::WaitForAnyRequest(); }
 }
