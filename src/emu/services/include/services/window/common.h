@@ -687,5 +687,14 @@ namespace eka2l1::epoc {
     std::optional<std::uint32_t> map_key_to_inputcode(key_map &map, std::uint32_t keycode);
 
     // TODO: This should not depends on the version of the system at all. This function is basically stereotyping
-    int get_approximate_pixel_to_twips_mul(const epocver ver);
+    float get_approximate_pixel_to_twips_mul(const epocver ver);
+
+    /**
+     * \brief Convert a pixel count to twips for a value the client may hand back in twips.
+     *
+     * With a whole twips-per-pixel ratio this is the plain product. With a fractional one (Series 80) it
+     * is the smallest whole twips count that get_nearest_font's truncating twips-to-pixels conversion
+     * turns back into the same pixel count, so a font spec read in twips and asked for again keeps its size.
+     */
+    std::int32_t pixels_to_twips(const epocver ver, const std::int32_t pixels);
 }

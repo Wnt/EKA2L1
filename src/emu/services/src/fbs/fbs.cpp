@@ -27,6 +27,7 @@
 #include <system/epoc.h>
 
 #include <services/fbs/fbs.h>
+#include <services/window/common.h>
 #include <services/fs/std.h>
 
 #include <common/cvt.h>
@@ -149,8 +150,9 @@ namespace eka2l1 {
             std::int32_t height_idx = ctx->get_argument_value<std::int32_t>(1).value_or(0);
             height_idx = (height_idx < 0) ? 0 : ((height_idx > LADDER_LAST) ? LADDER_LAST : height_idx);
             const std::int32_t twips = POINT_LADDER[height_idx] * 20;
-            // 96 dpi: 1440 twips per inch
-            ctx->complete((ctx->msg->function == fbs_font_height_in_twips) ? twips : (twips * 96 / 1440));
+            // The device's twips a pixel: 15 (96 dpi) for S60 v1/v2 as before, 9.78 for the Series 80 panel.
+            const std::int32_t pixels = static_cast<std::int32_t>(twips / epoc::get_approximate_pixel_to_twips_mul(ctx->sys->get_symbian_version_use()));
+            ctx->complete((ctx->msg->function == fbs_font_height_in_twips) ? twips : pixels);
             break;
         }
 
