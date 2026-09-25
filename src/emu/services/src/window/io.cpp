@@ -23,9 +23,6 @@
 #include <services/window/window.h>
 
 #include <kernel/kernel.h>
-#include <system/epoc.h>
-
-#include <optional>
 
 namespace eka2l1::epoc {
     void window_pointer_focus_walker::add_new_event(const epoc::event &evt) {
@@ -121,87 +118,16 @@ namespace eka2l1::epoc {
 
     void window_key_shipper::add_new_event(const epoc::event &evt) {
         evts_.push_back(evt);
+        translated_.push_back(std::nullopt);
+    }
+
+    void window_key_shipper::add_new_event(const epoc::event &evt, const translated_key &key) {
+        evts_.push_back(evt);
+        translated_.push_back(key);
     }
 
     static const bool is_device_std_key_not_repeatable(const std_scan_code code) {
         return (code >= std_key_device_0) && (code <= std_key_device_1);
-    }
-
-    // Series 80 keyboard stopgap. EKA2L1 does not run the ROM's EKTRAN/EKDATA key translation, and the
-    // fixed table in map_scancode_to_keycode() types every letter in upper case and nothing at all for the
-    // punctuation scan codes (0x78..0x93). Until that translation is ported, an S80 device gets only what
-    // typing text needs:
-    //  - a binding target >= 0x10000 is a character binding: the low 16 bits are the scan code, the high
-    //    16 bits the key code it types (0x003F007B is '?' on EStdKeyForwardSlash), whatever the state of
-    //    the host's Shift key, so the host keyboard layout does not matter;
-    //  - a letter takes its case from Shift xor Caps Lock, and Ctrl+letter types its control code;
-    //  - Shift, Ctrl, Chr (Func) and Caps Lock are tracked, stamped on every key event, and produce no
-    //    EEventKey;
-    //  - the keys that the ROM's EKDATA lists as non-autorepeating do not repeat.
-    static std::uint32_t s80_modifier_of(const std::uint32_t scancode) {
-        switch (scancode) {
-        case std_key_left_shift:
-            return event_modifier_left_shift | event_modifier_shift;
-
-        case std_key_left_ctrl:
-            return event_modifier_left_ctrl | event_modifier_ctrl;
-
-        case std_key_left_func:
-            return event_modifier_left_func | event_modifier_func;
-
-        case std_key_right_func:
-            return event_modifier_right_func | event_modifier_func;
-
-        case std_key_caps_lock:
-            return event_modifier_caps_lock;
-
-        default:
-            break;
-        }
-
-        return 0;
-    }
-
-    static bool is_s80_std_key_repeatable(const std::uint32_t code) {
-        return (code != std_key_escape) && (code != std_key_menu) && !s80_modifier_of(code) && ((code < std_key_device_0) || (code > std_key_device_3)) && ((code < std_key_application_0) || (code > std_key_application_7));
-    }
-
-    // The auto-repeat that the last S80 key down started. Any key up ends it, because the host may report the
-    // released key as another key than the pressed one (Shift already let go: '?' goes down, '/' comes up).
-    static std::optional<std::uint64_t> s80_repeat_data;
-
-    // Returns the key code the event types, or 0 to take it from map_scancode_to_keycode().
-    static std::uint32_t s80_translate_key(epoc::event &evt, std::uint32_t &modifiers) {
-        const std::uint32_t target = static_cast<std::uint32_t>(evt.key_evt_.scancode);
-        const std::uint32_t scancode = target & 0xFFFF;
-        const std::uint32_t modifier = s80_modifier_of(scancode);
-
-        std::uint32_t code = target >> 16;
-
-        if (modifier == event_modifier_caps_lock) {
-            if (evt.type == epoc::event_code::key_down) {
-                modifiers ^= modifier;
-            }
-        } else if (modifier) {
-            if (evt.type == epoc::event_code::key_down) {
-                modifiers |= modifier;
-            } else {
-                modifiers &= ~modifier;
-            }
-        } else if (!code && (scancode >= 'A') && (scancode <= 'Z')) {
-            const bool upper = ((modifiers & event_modifier_shift) != 0) != ((modifiers & event_modifier_caps_lock) != 0);
-
-            if (modifiers & event_modifier_ctrl) {
-                code = scancode - 'A' + 1;
-            } else {
-                code = upper ? scancode : (scancode + ('a' - 'A'));
-            }
-        }
-
-        evt.key_evt_.scancode = static_cast<std::int32_t>(scancode);
-        evt.key_evt_.modifiers = modifiers;
-
-        return code;
     }
 
     void window_key_shipper::start_shipping() {
@@ -216,19 +142,19 @@ namespace eka2l1::epoc {
         }
 
         int ui_rotation = focus->scr->ui_rotation;
-        const bool is_s80 = serv_->get_system()->is_s80_device_active();
 
-        for (auto &evt : evts_) {
-            const std::uint32_t s80_code = is_s80 ? s80_translate_key(evt, s80_modifiers_) : 0;
+        for (std::size_t evt_index = 0; evt_index < evts_.size(); evt_index++) {
+            epoc::event &evt = evts_[evt_index];
+            const std::optional<translated_key> &translated = translated_[evt_index];
 
             evt.key_evt_.scancode = epoc::post_processing_scancode(static_cast<epoc::std_scan_code>(evt.key_evt_.scancode),
                 ui_rotation);
 
-            bool dont_send_extra_key_event = (evt.type != epoc::event_code::key_down) || (is_s80 && s80_modifier_of(evt.key_evt_.scancode));
+            bool dont_send_extra_key_event = (evt.type != epoc::event_code::key_down);
 
             // TODO: My assumption... For now.
             // Actually this smells like a hack
-            const bool repeatable = is_s80 ? is_s80_std_key_repeatable(evt.key_evt_.scancode) : !is_device_std_key_not_repeatable(static_cast<epoc::std_scan_code>(evt.key_evt_.scancode));
+            bool repeatable = !is_device_std_key_not_repeatable(static_cast<epoc::std_scan_code>(evt.key_evt_.scancode));
 
             epoc::event extra_event = evt;
             extra_event.type = epoc::event_code::key;
@@ -236,31 +162,30 @@ namespace eka2l1::epoc {
             kernel_system *kern = focus->client->get_ws().get_kernel_system();
             ntimer *timing = kern->get_ntimer();
 
-            auto cancel_repeat = [&](std::optional<std::uint64_t> &data) {
-                if (!data) {
-                    return;
-                }
+            std::uint32_t the_code = 0;
 
-                kern->lock();
+            if (translated) {
+                // The device's keyboard tables decided: a key event may follow a key-up too (Ctrl+digits ends
+                // on Ctrl up), and auto-repeat is whatever the table says.
+                the_code = translated->code;
+                dont_send_extra_key_event = !translated->produce;
+                repeatable = (translated->modifiers & event_modifier_repeatable) != 0;
+            } else {
+                the_code = epoc::map_scancode_to_keycode(static_cast<std_scan_code>(evt.key_evt_.scancode));
+            }
 
-                if (!timing->unschedule_event(serv_->repeatable_event_, *data)) {
-                    serv_->cancel_repeatable_list.insert(*data);
-                }
-
-                kern->unlock();
-                data.reset();
-            };
-
-            const std::uint32_t the_code = s80_code ? s80_code : epoc::map_scancode_to_keycode(static_cast<std_scan_code>(evt.key_evt_.scancode));
-
-            const std::uint64_t data_for_repeatable = extra_event.key_evt_.scancode | (static_cast<std::uint64_t>(the_code) << 32);
+            const std::uint32_t repeat_code = (translated && (evt.type == epoc::event_code::key_up)) ? translated->repeat_code : the_code;
+            const std::uint64_t data_for_repeatable = extra_event.key_evt_.scancode | (static_cast<std::uint64_t>(repeat_code) << 32);
 
             if (!dont_send_extra_key_event) {
                 extra_event.key_evt_.code = the_code;
                 extra_event.time = kern->universal_time();
 
-                if (repeatable)
-                    extra_event.key_evt_.modifiers |= event_modifier_repeatable;
+                if (translated) {
+                    extra_event.key_evt_.modifiers = translated->modifiers;
+                } else if (repeatable) {
+                    extra_event.key_evt_.modifiers = event_modifier_repeatable;
+                }
             }
 
             // A captured key goes to the winning capturer instead of the focus: CaptureKey requests are
@@ -288,6 +213,23 @@ namespace eka2l1::epoc {
             raw_target->queue_event(evt);
             kern->unlock();
 
+            auto cancel_repeat = [&](const std::uint64_t data) {
+                kern->lock();
+
+                if (!timing->unschedule_event(serv_->repeatable_event_, data)) {
+                    serv_->cancel_repeatable_list.insert(data);
+                }
+
+                kern->unlock();
+            };
+
+            if (translated && (evt.type == epoc::event_code::key_down) && serv_->active_repeat_) {
+                // One key repeats at a time, as with the window server's keyboard repeat: any key going
+                // down ends the repeat of the key before it.
+                cancel_repeat(serv_->active_repeat_.value());
+                serv_->active_repeat_.reset();
+            }
+
             if (!dont_send_extra_key_event) {
                 // Give it a single key event also
                 kern->lock();
@@ -295,23 +237,37 @@ namespace eka2l1::epoc {
                 kern->unlock();
 
                 if ((evt.type == epoc::event_code::key_down) && repeatable) {
-                    if (is_s80) {
-                        cancel_repeat(s80_repeat_data);
-                        s80_repeat_data = data_for_repeatable;
-                    }
-
+                    serv_->repeat_modifiers_ = extra_event.key_evt_.modifiers | event_modifier_repeatable;
                     timing->schedule_event(serv_->initial_repeat_delay_, serv_->repeatable_event_, data_for_repeatable);
+
+                    if (translated) {
+                        serv_->active_repeat_ = data_for_repeatable;
+                    }
                 }
             }
 
-            if (is_s80 && (evt.type == epoc::event_code::key_up)) {
-                cancel_repeat(s80_repeat_data);
-            } else if ((evt.type == epoc::event_code::key_up) && repeatable) {
-                std::optional<std::uint64_t> data = data_for_repeatable;
-                cancel_repeat(data);
+            if (translated) {
+                // A release ends the repeat only if its key is the one repeating.
+                if ((evt.type == epoc::event_code::key_up) && serv_->active_repeat_ && (serv_->active_repeat_.value() == data_for_repeatable)) {
+                    cancel_repeat(data_for_repeatable);
+                    serv_->active_repeat_.reset();
+                }
+
+                repeatable = false;
+            }
+
+            if ((evt.type == epoc::event_code::key_up) && repeatable) {
+                kern->lock();
+
+                if (!timing->unschedule_event(serv_->repeatable_event_, data_for_repeatable)) {
+                    serv_->cancel_repeatable_list.insert(data_for_repeatable);
+                }
+
+                kern->unlock();
             }
         }
 
         evts_.clear();
+        translated_.clear();
     }
 }

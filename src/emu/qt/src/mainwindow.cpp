@@ -73,6 +73,7 @@
 #include <QDropEvent>
 #include <QEventLoop>
 #include <QFileDialog>
+#include <QKeySequence>
 #include <QFuture>
 #include <QFutureWatcher>
 #include <QInputDialog>
@@ -734,6 +735,10 @@ void main_window::refresh_current_device_label() {
             current_device_label_->setText(QString("%1 (%2)").arg(QString::fromStdString(crr->model.c_str()), QString::fromStdString(crr->firmware_code)));
         }
     }
+
+    // A Series 80 Communicator has a full keyboard, and Ctrl+F is one of its shortcuts: do not steal it.
+    const bool s80 = emulator_state_.symsys->is_s80_device_active();
+    ui_->action_fullscreen->setShortcut(s80 ? QKeySequence() : QKeySequence(QStringLiteral("Ctrl+F")));
 }
 
 void main_window::on_about_triggered() {
@@ -1588,7 +1593,7 @@ void main_window::make_default_binding_profile() {
 
     if (!entry_count) {
         emulator_state_.conf.current_keybind_profile = "default";
-        make_default_keybind_profile(emulator_state_.conf.keybinds, emulator_state_.symsys && emulator_state_.symsys->is_s80_device_active());
+        make_default_keybind_profile(emulator_state_.conf.keybinds);
 
         emulator_state_.conf.serialize();
     }

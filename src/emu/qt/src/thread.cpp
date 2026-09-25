@@ -144,11 +144,14 @@ static eka2l1::drivers::input_event make_controller_event_driver(int jid, int bu
     return evt;
 }
 
-static eka2l1::drivers::input_event make_key_event_driver(const int key, const eka2l1::drivers::key_state key_state) {
+static eka2l1::drivers::input_event make_key_event_driver(const int key, const eka2l1::drivers::key_state key_state,
+    const std::uint32_t text = 0, const std::uint32_t native = 0) {
     eka2l1::drivers::input_event evt;
     evt.type_ = eka2l1::drivers::input_event_type::key;
     evt.key_.state_ = key_state;
     evt.key_.code_ = key;
+    evt.key_.text_ = text;
+    evt.key_.native_ = native;
 
     return evt;
 }
@@ -159,6 +162,20 @@ static void on_ui_window_key_release(void *userdata, const int key) {
 
     const auto guard = lock_reporting_stall(emu->lockdown, "the UI lock to deliver a key release");
     if (emu->ui_main && emu->ui_main->deliver_key_event(static_cast<std::uint32_t>(key), false)) {
+        return;
+    }
+    if (emu->winserv)
+        emu->winserv->queue_input_from_driver(key_evt);
+}
+
+static void on_ui_window_key_event(void *userdata, const std::uint32_t key, const std::uint32_t text, const std::uint32_t native,
+    const bool pressed) {
+    eka2l1::desktop::emulator *emu = reinterpret_cast<eka2l1::desktop::emulator *>(userdata);
+    auto key_evt = make_key_event_driver(static_cast<int>(key), pressed ? eka2l1::drivers::key_state::pressed : eka2l1::drivers::key_state::released,
+        text, native);
+
+    const auto guard = lock_reporting_stall(emu->lockdown, pressed ? "the UI lock to deliver a key press" : "the UI lock to deliver a key release");
+    if (emu->ui_main && emu->ui_main->deliver_key_event(key, pressed)) {
         return;
     }
     if (emu->winserv)
@@ -200,6 +217,7 @@ namespace eka2l1::desktop {
 
         state.window->raw_mouse_event = on_ui_window_mouse_evt;
         state.window->button_pressed = on_ui_window_key_press;
+        state.window->key_event_hook = on_ui_window_key_event;
         state.window->button_released = on_ui_window_key_release;
 
         // A kiosk display already has its final size; resizing it here would only race the layout.

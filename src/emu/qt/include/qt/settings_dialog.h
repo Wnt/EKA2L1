@@ -56,7 +56,7 @@ static constexpr const char *TRUE_SIZE_RESIZE_SETTING_NAME = "trueSizeResizeEnab
 static constexpr const char *BACKGROUND_COLOR_DISPLAY_SETTING_NAME = "backgroundDisplayColor";
 static constexpr const char *THEME_SETTING_NAME = "theme";
 
-void make_default_keybind_profile(eka2l1::config::keybind_profile &profile, const bool s80_device = false);
+void make_default_keybind_profile(eka2l1::config::keybind_profile &profile);
 
 class settings_dialog : public QDialog {
     Q_OBJECT

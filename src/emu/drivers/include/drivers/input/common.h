@@ -109,6 +109,8 @@ namespace eka2l1::drivers {
     struct key_event {
         int code_;
         key_state state_;
+        std::uint32_t text_; ///< The character the host typed with this key (UTF-32), or 0. Only for key, not key_raw.
+        std::uint32_t native_; ///< The host's physical key id (X keycode...), or 0. Pairs a release with its press.
     };
 
     /**

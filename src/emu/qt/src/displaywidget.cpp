@@ -179,6 +179,17 @@ void display_widget::keyPressEvent(QKeyEvent *event) {
         return;
     }
 
+    if (key_event_hook) {
+        // The character this key types on the host (a surrogate pair counts as one), so the guest can
+        // look up how its own keyboard types it; and the physical key, so the release finds its press
+        // even when Shift changed the key code in between.
+        const QString text = event->text();
+        const QVector<uint> ucs4 = text.toUcs4();
+
+        key_event_hook(userdata_, event->key(), (ucs4.size() == 1) ? ucs4[0] : 0, event->nativeScanCode(), true);
+        return;
+    }
+
     if (button_pressed) {
         button_pressed(userdata_, event->key());
     }
@@ -191,6 +202,11 @@ bool display_widget::focusNextPrevChild(bool next) {
 
 void display_widget::keyReleaseEvent(QKeyEvent *event) {
     if (event->isAutoRepeat()) {
+        return;
+    }
+
+    if (key_event_hook) {
+        key_event_hook(userdata_, event->key(), 0, event->nativeScanCode(), false);
         return;
     }
 

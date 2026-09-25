@@ -44,6 +44,7 @@
 #include <services/window/common.h>
 #include <services/window/fifo.h>
 #include <services/window/io.h>
+#include <services/window/keytran.h>
 #include <services/window/opheader.h>
 #include <services/window/protocol.h>
 #include <services/window/scheduler.h>
@@ -417,6 +418,8 @@ namespace eka2l1 {
 
         int repeatable_event_;
         int deliver_report_visibility_evt_;
+        std::uint32_t repeat_modifiers_; ///< Modifiers carried by the key event that is auto-repeating.
+        std::optional<std::uint64_t> active_repeat_; ///< The translated key repeating now (scan code | code << 32).
 
         std::set<std::uint64_t> cancel_repeatable_list;
 
@@ -452,6 +455,34 @@ namespace eka2l1 {
 
         void make_mouse_event(drivers::input_event &driver_evt_, epoc::event &guest_evt_, epoc::screen *scr);
         bool update_pointer_position(const epoc::event &guest_evt_);
+
+        /**
+         * \brief The device's own key translation (EKDATA tables), used on Series 80.
+         *
+         * Loaded when the first client connects. While it is loaded, keys typed on the host are fed
+         * through it and the built-in scan code table is not used.
+         */
+        std::unique_ptr<epoc::key_translator> key_translator_;
+
+        struct held_host_key {
+            std::uint32_t scancode = 0; ///< Guest scan code the host key went down as.
+            std::uint32_t code = 0; ///< Key code produced on key down; identifies its auto-repeat.
+            std::uint32_t modifiers = 0; ///< Modifiers of a character event that no key can type.
+            bool by_character = false; ///< A character event that no key can type: not fed through the translator.
+            bool typed = false; ///< Shift/Chr were pressed or lifted for it: put them back as the host holds them on release.
+        };
+
+        std::unordered_map<std::uint32_t, held_host_key> held_host_keys_; ///< Host key id -> what it pressed.
+        std::unordered_map<std::uint32_t, int> host_modifier_keys_; ///< Device modifier scan code -> host keys holding it.
+
+        void reconcile_translated_modifiers();
+
+        void init_key_translator();
+        bool handle_translated_key_input(const drivers::input_event &input_event);
+        epoc::key_translator::result ship_raw_translated_key(const std::uint32_t scancode, const bool key_up,
+            const std::uint32_t repeat_code);
+        void ship_key_by_character(const std::uint32_t scancode, const std::uint32_t code, const std::uint32_t modifiers,
+            const bool key_up);
 
         // Series 80 v2 shell: the hardware application buttons (see s80_handle_app_key in window.cpp).
         int s80_app_key_evt_{ -1 };

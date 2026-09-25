@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include <common/vecx.h>
 #include <services/window/classes/winbase.h>
 
@@ -49,11 +51,22 @@ namespace eka2l1::epoc {
      * \brief Deliver key events to windows that are suitable.
      */
     struct window_key_shipper {
+        /**
+         * \brief What the device's own key translator decided for a raw key event.
+         *
+         * Without it the shipper falls back to the built-in scan code to key code table.
+         */
+        struct translated_key {
+            bool produce = false; ///< Queue an EEventKey after the raw event.
+            std::uint32_t code = 0; ///< Key code of that EEventKey.
+            std::uint32_t modifiers = 0; ///< Modifiers of that EEventKey (auto-repeat when it has EModifierAutorepeatable).
+            std::uint32_t repeat_code = 0; ///< On key up: the key code whose auto-repeat this release ends.
+        };
+
         eka2l1::window_server *serv_; ///< Pointer to window server.
 
         std::vector<epoc::event> evts_;
-
-        std::uint32_t s80_modifiers_ = 0; ///< Series 80 keyboard stopgap: Shift/Ctrl/Chr/Caps Lock state.
+        std::vector<std::optional<translated_key>> translated_; ///< Parallel to evts_.
 
         explicit window_key_shipper(window_server *serv);
 
@@ -63,6 +76,11 @@ namespace eka2l1::epoc {
          * \param evt   Reference to the event.
          */
         void add_new_event(const epoc::event &evt);
+
+        /**
+         * \brief Queue a raw key event whose key code was already decided by the key translator.
+         */
+        void add_new_event(const epoc::event &evt, const translated_key &key);
 
         /**
          * \brief Start delivering key events.
