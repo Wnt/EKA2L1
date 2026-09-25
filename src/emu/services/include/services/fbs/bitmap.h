@@ -145,7 +145,7 @@ namespace eka2l1::epoc {
         void construct(loader::sbm_header &info, epoc::display_mode disp_mode, void *data, const void *base,
             const bool support_current_display_mode_flag, const bool white_fill = false);
 
-        void post_construct(fbs_server *serv);
+        void post_construct(int legacy_level);
         int copy_to(std::uint8_t *dest, const eka2l1::vec2 &dest_size, fbs_server *serv);
 
         bitmap_file_compression compression_type() const;
