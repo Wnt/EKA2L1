@@ -1,18 +1,56 @@
 // Copyright (c) 2026 EKA2L1 Team. SPDX-License-Identifier: GPL-3.0-or-later
-// ARM-side FBS/BitGDI contract probe. It paints directly to the screen; it is not a Desk proof.
+// ARM-side FBS/BitGDI contract probe. Optional "window" argument exercises Wserv sharing.
 #include <e32base.h>
 #include <e32std.h>
 #include <e32svr.h>
 #include <fbs.h>
 #include <bitdev.h>
 #include <bitstd.h>
+#include <w32std.h>
+
+LOCAL_C void ConnectFbsL() {
+    TInt err = RFbsSession::Connect();
+    if (err == KErrNotFound) {
+        // The emulator prestarts ROM FBS. Its heap exists before its public
+        // server does; synchronize with that process instead of spawning a peer.
+        TFindProcess finder(_L("*fbserv*"));
+        TFullName name;
+        User::LeaveIfError(finder.Next(name));
+        RProcess process;
+        User::LeaveIfError(process.Open(name));
+        TRequestStatus ready;
+        process.Rendezvous(ready);
+        err = RFbsSession::Connect(); // Close the ready-before-arm race.
+        if (err == KErrNone) process.RendezvousCancel(ready);
+        User::WaitForRequest(ready);
+        process.Close();
+        if (err != KErrNone) {
+            User::LeaveIfError(ready.Int());
+            err = RFbsSession::Connect();
+        }
+    }
+    User::LeaveIfError(err);
+}
 
 LOCAL_C void RunL() {
-    User::LeaveIfError(RFbsSession::Connect());
+    RProcess self, opened;
+    User::LeaveIfError(opened.Open(self.FullName(), EOwnerThread));
+    if (opened.Id() != self.Id()) User::Leave(KErrCorrupt);
+    opened.Close();
+    if (opened.Open(_L("Z4_NoSuchProcess")) != KErrNotFound) User::Leave(KErrCorrupt);
+    RDebug::Print(_L("FBSPROBE process open by name PASS"));
+    ConnectFbsL();
     RDebug::Print(_L("FBSPROBE connected"));
+    RWsSession ws;
+    User::LeaveIfError(ws.Connect());
+    ws.Flush(); // Let Wserv initialize its screen before the direct-screen probe.
     CFbsScreenDevice* screen = CFbsScreenDevice::NewL(_L(""), EColor64K);
+    CFbsBitmap canvas;
+    User::LeaveIfError(canvas.Create(TSize(640,200), EColor64K));
+    CFbsBitmapDevice* canvasDevice = CFbsBitmapDevice::NewL(&canvas);
     CFbsBitGc* gc = 0;
-    User::LeaveIfError(screen->CreateContext(gc));
+    User::LeaveIfError(canvasDevice->CreateContext(gc));
+    gc->SetBrushStyle(CGraphicsContext::ESolidBrush);
     gc->SetBrushColor(KRgbWhite);
     gc->Clear();
     const TPtrC names[] = {_L("System"), _L("SwissA"), _L("SwissA")};
@@ -23,6 +61,9 @@ LOCAL_C void RunL() {
         User::LeaveIfError(screen->GetNearestFontInPixels(font, spec));
         RDebug::Print(_L("FBSPROBE font %d height=%d ascent=%d width=%d"), i,
             font->HeightInPixels(), font->AscentInPixels(), font->TextWidthInPixels(_L("Hello museum 9300")));
+        TFontSpec actual = font->FontSpecInTwips();
+        RDebug::Print(_L("FBSPROBE actual %S heightTwips=%d bold=%d bitmap=%d"),
+            &actual.iTypeface.iName, actual.iHeight, actual.iFontStyle.StrokeWeight(), actual.iFontStyle.BitmapType());
         gc->UseFont(font);
         gc->SetPenColor(KRgbBlack);
         gc->DrawText(_L("Hello museum 9300 =A1+A2"), TPoint(12, 28+i*30));
@@ -60,7 +101,40 @@ LOCAL_C void RunL() {
     TInt loaded = rom.Load(_L("Z:\\system\\data\\splashscreen.mbm"), 0);
     RDebug::Print(_L("FBSPROBE ROM MBM load=%d size=%dx%d"), loaded, rom.SizeInPixels().iWidth, rom.SizeInPixels().iHeight);
     if (loaded==KErrNone) gc->DrawBitmap(TRect(360,100,520,180), &rom);
-    screen->Update();
+    CFbsBitmap extracted;
+    TInt extractedResult = extracted.Load(_L("Z:\\System\\Apps\\desk\\desk.aif"), 2, ETrue, 0x4c);
+    RDebug::Print(_L("FBSPROBE extracted ROM-format AIF load=%d"), extractedResult);
+    TBuf<32> arguments;
+    self.CommandLine(arguments);
+    RWindowGroup group(ws);
+    RWindow window(ws);
+    if (arguments.CompareF(_L("window")) == 0) {
+        // Keep the completed image in a real window's redraw store. A direct panel
+        // scribble can be erased by the ROM window server's later background paint.
+        CWsScreenDevice* wsScreen = new(ELeave) CWsScreenDevice(ws);
+        User::LeaveIfError(wsScreen->Construct());
+        User::LeaveIfError(group.Construct(1));
+        group.SetOrdinalPosition(0, 1);
+        User::LeaveIfError(window.Construct(group, 2));
+        window.SetExtent(TPoint(0,0), TSize(640,200));
+        window.SetBackgroundColor(KRgbWhite);
+        window.Activate();
+        window.Invalidate();
+        CWindowGc* windowGc = 0;
+        User::LeaveIfError(wsScreen->CreateContext(windowGc));
+        windowGc->Activate(window);
+        window.BeginRedraw();
+        windowGc->Clear();
+        windowGc->DrawBitmap(TPoint(0,0), &canvas);
+        window.EndRedraw();
+        windowGc->Deactivate();
+        ws.Flush();
+    } else {
+        CFbsBitGc* screenGc = 0;
+        User::LeaveIfError(screen->CreateContext(screenGc));
+        screenGc->BitBlt(TPoint(0,0), &canvas);
+        screen->Update();
+    }
     RDebug::Print(_L("FBSPROBE painted"));
     FOREVER { User::WaitForAnyRequest(); }
 }

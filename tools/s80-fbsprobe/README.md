@@ -6,7 +6,7 @@ bytes belong in this directory.
 
 Run with `--run C:\System\Programs\FbsProbe.exe` and `EKA2L1_ROM_WSERV=1`
 so that scdv keeps its ARM exports. The probe uses RFbsSession, CFbsScreenDevice,
-CFbsBitGc and CFbsBitmap from the guest ROM. It draws directly into the screen:
+CFbsBitGc and CFbsBitmap from the guest ROM. By default it composes a shared bitmap and blits it directly into the screen:
 this is a diagnostic, not a window-server/Desk or input proof. Other apps can
 paint over it. Use the controlled boot configuration to avoid Starter.
 
@@ -21,3 +21,19 @@ The mixed-mode bootstrap regression this exposes is a cold RFbsSession client
 opening FbsSharedChunk before any host launcher has created an icon. A public
 HLE endpoint without its heaps lets the guest start a second, ROM FBS and apply
 HLE object offsets to the ROM heap. Heaps must be published before guest startup.
+
+The probe synchronizes with a prestarted ROM FBS through RProcess rendezvous.
+It checks process open by full name, thread handle ownership and missing-name
+failure before running the FBS contracts. It releases each font before opening
+the next; that intentionally exercises shared glyph-cache invalidation on
+COpenFont address reuse. Actual face/style/bitmap type and metrics are logged.
+
+Pass the guest argument `window` after the executable path to display the canvas
+through RWindow/CWindowGc instead. That mode exercises cross-process duplication
+and the ROM window server's redraw store. It is a distinct diagnostic: direct
+panel success does not imply this path succeeds. The direct image may later be
+overwritten by Wserv.
+
+The final probe also logs loading bitmap 2 from the embedded store at offset 0x4c
+of the stock Nokia 9300 desk.aif. This extracted ROM-format asset exposes the
+unmapped-ROM-bitmap wall in full ROM FBS mode (KErrCorrupt), independently of Desk.

@@ -16,7 +16,7 @@ CXXFLAGS=(-march=armv4t -mthumb-interwork -pipe -c -nostdinc -Wall -Wno-ctor-dto
   -Wno-unknown-pragmas -s -fomit-frame-pointer -O
   -D__SYMBIAN32__ -D__GCC32__ -D__EPOC32__ -D__MARM__ -D__MARM_ARMI__ -D__EXE__ -DNDEBUG -D_UNICODE
   -I"$SRC" -I"$SDK/Epoc32/include" -I"$SDK/caseinc")
-LIBS=("$LIB/EGCC.LIB" "$LIB/EUSER.lib" "$LIB/FBSCLI.lib" "$LIB/BITGDI.lib" "$LIB/GDI.lib")
+LIBS=("$LIB/EGCC.LIB" "$LIB/EUSER.lib" "$LIB/FBSCLI.lib" "$LIB/BITGDI.lib" "$LIB/GDI.lib" "$LIB/WS32.lib")
 LD=(arm-epoc-pe-ld -s -e _E32Startup -u _E32Startup)
 arm-epoc-pe-g++ "${CXXFLAGS[@]}" "$SRC/$NAME.cpp" -o "$OUT/$NAME.o"
 rm -f "$OUT/$NAME.in"; arm-epoc-pe-ar cr "$OUT/$NAME.in" "$OUT/$NAME.o"
