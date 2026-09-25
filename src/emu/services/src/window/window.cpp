@@ -2212,18 +2212,59 @@ namespace eka2l1 {
         }
     }
 
+    // Uikon names an app's window group "<flags>\0<app UID in hex>\0<caption>". Returns that UID, or 0.
+    static std::uint32_t app_uid_of_group_name(const epoc::window_group *group) {
+        const std::u16string &name = group->name;
+        const std::size_t first = name.find(u'\0');
+        if (first == std::u16string::npos) {
+            return 0;
+        }
+
+        const std::size_t second = name.find(u'\0', first + 1);
+        const std::u16string hex = name.substr(first + 1, (second == std::u16string::npos) ? std::u16string::npos : second - first - 1);
+        if (hex.empty() || (hex.size() > 8)) {
+            return 0;
+        }
+
+        std::uint32_t value = 0;
+        for (const char16_t c : hex) {
+            value <<= 4;
+            if ((c >= u'0') && (c <= u'9')) {
+                value |= static_cast<std::uint32_t>(c - u'0');
+            } else if ((c >= u'a') && (c <= u'f')) {
+                value |= static_cast<std::uint32_t>(c - u'a' + 10);
+            } else if ((c >= u'A') && (c <= u'F')) {
+                value |= static_cast<std::uint32_t>(c - u'A' + 10);
+            } else {
+                return 0;
+            }
+        }
+
+        return value;
+    }
+
     epoc::window_group *window_server::find_group_of_app(const std::uint32_t app_uid) {
         epoc::window_group *fallback = nullptr;
 
         for (epoc::screen *scr = screens; scr; scr = scr->next) {
             for (epoc::window_group *group = reinterpret_cast<epoc::window_group *>(scr->root->child); group;
                  group = reinterpret_cast<epoc::window_group *>(group->sibling)) {
-                kernel::process *owner = group->uid_owner_change_process;
+                // A group named for an app belongs to that app, whichever process owns it: Desk starts
+                // Control panel (0x10004fef) so that its group's owner process carries Desk's UID, and the
+                // Desk button then brought Control panel forward instead of Desk.
+                const std::uint32_t named_uid = app_uid_of_group_name(group);
+                if (named_uid) {
+                    if (named_uid != app_uid) {
+                        continue;
+                    }
+                } else {
+                    kernel::process *owner = group->uid_owner_change_process;
 
-                // The starter of an app can die before the app's group does (see ~window_group).
-                if (!owner || (kern->get_by_id<kernel::process>(group->uid_owner_change_process_id) != owner)
-                    || (owner->get_uid() != app_uid)) {
-                    continue;
+                    // The starter of an app can die before the app's group does (see ~window_group).
+                    if (!owner || (kern->get_by_id<kernel::process>(group->uid_owner_change_process_id) != owner)
+                        || (owner->get_uid() != app_uid)) {
+                        continue;
+                    }
                 }
 
                 if (group->can_receive_focus()) {

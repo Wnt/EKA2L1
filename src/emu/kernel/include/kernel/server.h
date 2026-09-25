@@ -107,6 +107,10 @@ namespace eka2l1 {
             kernel::thread *owner_thread;
             kernel::thread *request_own_thread;
 
+            // EKA1: the client-thread handle handed to the server in each RMessage, one per (receiving thread,
+            // client thread), kept for the server's life. See accept().
+            std::unordered_map<std::uint64_t, kernel::handle> eka1_client_handles_;
+
             bool hle = false;
             bool unhandle_callback_enable = false;
 

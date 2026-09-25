@@ -169,6 +169,7 @@ namespace eka2l1 {
 
             msg->msg_session = (headless_) ? nullptr : this;
             msg->session_ptr_lle = cookie_address;
+            msg->sender_session_uid = static_cast<std::uint32_t>(unique_id());
 
             in_progress_msgs_.push(&msg->session_msg_link);
 

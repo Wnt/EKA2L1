@@ -305,10 +305,13 @@ namespace eka2l1 {
             // ROM code addresses on the top of the stack: return addresses of the callers.
             const std::string stack_desc = thread_dump_stack_of(kern, pr, sp, 12);
 
-            LOG_INFO(KERNEL, "TDUMP {} / {} state={} wait={} reqcnt={} pc={} lr={} sp=0x{:x} r0=0x{:x} r1=0x{:x} r2=0x{:x} r3=0x{:x} r4=0x{:x} |{}",
+            // The word r0 points at: a thread parked in User::WaitForRequest(TRequestStatus&) holds the status there.
+            const std::uint32_t *r0_word = pr ? reinterpret_cast<const std::uint32_t *>(pr->get_ptr_on_addr_space(ctx.cpu_registers[0])) : nullptr;
+
+            LOG_INFO(KERNEL, "TDUMP {} / {} state={} wait={} reqcnt={} pc={} lr={} sp=0x{:x} r0=0x{:x} [r0]=0x{:x} r1=0x{:x} r2=0x{:x} r3=0x{:x} r4=0x{:x} |{}",
                 pr ? pr->name() : std::string("?"), thr->name(), static_cast<int>(thr->current_state()), wait_desc,
                 thr->request_count(), thread_dump_name_addr(kern, ctx.cpu_registers[15]),
-                thread_dump_name_addr(kern, ctx.cpu_registers[14]), sp, ctx.cpu_registers[0], ctx.cpu_registers[1],
+                thread_dump_name_addr(kern, ctx.cpu_registers[14]), sp, ctx.cpu_registers[0], r0_word ? *r0_word : 0xDEADDEADu, ctx.cpu_registers[1],
                 ctx.cpu_registers[2], ctx.cpu_registers[3], ctx.cpu_registers[4], stack_desc);
         }
 
@@ -1325,6 +1328,21 @@ namespace eka2l1 {
             }
             const address beg = seg->get_code_run_addr(pr);
             if (beg && (beg <= addr) && (addr < beg + seg->get_text_size())) {
+                // Nearest export at or below the address: "ord N+off" names the exported function a
+                // parked thread sits in, which the SDK's import libraries map to a symbol.
+                std::uint32_t best_ord = 0;
+                address best_addr = 0;
+                const std::vector<std::uint32_t> exports = seg->get_export_table(pr);
+                for (std::size_t i = 0; i < exports.size(); i++) {
+                    const address ex = exports[i] & ~1u;
+                    if ((ex <= addr) && (ex >= best_addr) && (ex >= beg)) {
+                        best_addr = ex;
+                        best_ord = static_cast<std::uint32_t>(i + 1);
+                    }
+                }
+                if (best_ord) {
+                    return fmt::format("{}+0x{:x}(ord{}+0x{:x})", seg->name(), addr - beg, best_ord, addr - best_addr);
+                }
                 return fmt::format("{}+0x{:x}", seg->name(), addr - beg);
             }
         }

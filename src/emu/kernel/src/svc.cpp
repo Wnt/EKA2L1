@@ -858,7 +858,8 @@ namespace eka2l1::epoc {
             }
         }
 
-        if (msg->thread_handle_low) {
+        // The server may have closed the client handle itself: only close it while it still names the client.
+        if (msg->thread_handle_low && (kern->get_kernel_obj_raw(msg->thread_handle_low, kern->crr_thread()) == msg->own_thr)) {
             kern->close(msg->thread_handle_low);
         }
 
@@ -1418,8 +1419,8 @@ namespace eka2l1::epoc {
 
         if (kern->get_config()->log_ipc) {
             kernel::thread *sender = kern->crr_thread();
-            LOG_TRACE(KERNEL, "Sending {} {} to {} from {} (args 0x{:X} 0x{:X} 0x{:X} 0x{:X}, flags 0x{:X}, sts 0x{:X})",
-                ord, sync ? "sync" : "async", ss->get_server()->name(), sender ? sender->name() : std::string("?"),
+            LOG_TRACE(KERNEL, "Sending {} {} to {} session {} (cookie 0x{:X}) from {} (args 0x{:X} 0x{:X} 0x{:X} 0x{:X}, flags 0x{:X}, sts 0x{:X})",
+                ord, sync ? "sync" : "async", ss->get_server()->name(), ss->unique_id(), ss->get_cookie_address(), sender ? sender->name() : std::string("?"),
                 static_cast<std::uint32_t>(arg.args[0]), static_cast<std::uint32_t>(arg.args[1]),
                 static_cast<std::uint32_t>(arg.args[2]), static_cast<std::uint32_t>(arg.args[3]),
                 static_cast<std::uint32_t>(arg.flag), status.ptr_address());

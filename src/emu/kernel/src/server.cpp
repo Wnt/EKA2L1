@@ -113,11 +113,37 @@ namespace eka2l1::service {
             dat_hle->ipc_msg_handle = msg->id;
             dat_hle->function = msg->function;
             dat_hle->session_ptr = msg->session_ptr_lle;
-            dat_hle->client_thread_handle = kern->open_handle_with_thread(request_own_thread,
-                msg->own_thr, kernel::owner_type::thread);
+            // EKA1 RMessage::Client() is the session's client: every message of one session carries the same RThread
+            // handle for as long as the session lives, and servers match requests by it. The Series 80 SkinServer
+            // keeps each client's op 6 notification with its client handle; op 7 (sent by the skin client's
+            // CActive::Cancel) completes the notification with KErrCancel only when its client handle is the one
+            // the notification came with, and closing another session of the same thread drops notifications of
+            // that session's client handle. A fresh handle per message (closed on completion) meant op 7 matched
+            // nothing, so every app's Exit parked in that Cancel for good (CEikonEnv::DestroyEnvironment ->
+            // skin.dll -> CActive::Cancel -> User::WaitForRequest) and the app never ended.
+            const std::uint64_t client_key = (static_cast<std::uint64_t>(request_own_thread->unique_id()) << 32)
+                | msg->sender_session_uid;
+            kernel::handle client_handle = kernel::INVALID_HANDLE;
+
+            auto cached = eka1_client_handles_.find(client_key);
+            if ((cached != eka1_client_handles_.end()) && (kern->get_kernel_obj_raw(cached->second, request_own_thread) == msg->own_thr)) {
+                client_handle = cached->second;
+            } else {
+                client_handle = kern->open_handle_with_thread(request_own_thread, msg->own_thr, kernel::owner_type::thread);
+                eka1_client_handles_[client_key] = client_handle;
+            }
+
+            dat_hle->client_thread_handle = client_handle;
 
             std::copy(msg->args.args, msg->args.args + 4, dat_hle->args);
-            msg->thread_handle_low = dat_hle->client_thread_handle;
+
+            // The session ends with its disconnect message: its handle goes when that message is completed.
+            if (msg->type == ipc_message_type_disconnect) {
+                eka1_client_handles_.erase(client_key);
+                msg->thread_handle_low = client_handle;
+            } else {
+                msg->thread_handle_low = 0;
+            }
         } else {
             request_data = eka2l1::ptr<message2>(request_data.ptr_address() & ~1);
             message2 *dat_hle = request_data.get(request_own_thread->owning_process());

@@ -88,6 +88,10 @@ namespace eka2l1 {
                 cookie_address = addr;
             }
 
+            kernel::address get_cookie_address() const {
+                return cookie_address;
+            }
+
             void set_associated_handle(const kernel::handle h) {
                 associated_handle = h;
             }

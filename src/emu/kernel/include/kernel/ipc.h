@@ -109,6 +109,7 @@ namespace eka2l1 {
         ipc_arg args;
         service::session *msg_session;
         int session_ptr_lle; // This should be null because the server check for it
+        std::uint32_t sender_session_uid; // The session that sent it, also for a headless disconnect
 
         eka2l1::ptr<epoc::request_status> request_sts;
 
