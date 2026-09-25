@@ -46,6 +46,8 @@ namespace eka2l1::epoc {
         } data_;
     };
 
+    static_assert(sizeof(raw_event_eka1) == 16, "EKA1 TRawEvent ABI");
+
     struct raw_event {
         std::uint8_t type_;
         std::uint8_t tip_;

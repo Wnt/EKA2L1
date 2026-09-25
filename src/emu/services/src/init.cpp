@@ -672,6 +672,18 @@ namespace eka2l1 {
                 return;
             }
 
+            // EKA1 RFbsSession opens FbsSharedChunk before connecting to the server.
+            // Lazy initialization on Connect was too late for a non-GUI executable:
+            // it started ROM fbserv, mapped that heap, then connected to HLE FBS and
+            // interpreted our offsets against the other heap. Publish the HLE heaps
+            // before any guest runs.
+            if (kern->is_eka1()) {
+                auto *fbs = kern->get_by_name<fbs_server>(epoc::get_fbs_server_name_by_epocver(kern->get_epoc_version()));
+                if (fbs) {
+                    fbs->ensure_initialized();
+                }
+            }
+
             std::string list;
             bool optional_entries = false;
             if (const char *env = std::getenv("EKA2L1_PRESTART")) {
