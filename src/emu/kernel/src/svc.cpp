@@ -4079,6 +4079,47 @@ namespace eka2l1::epoc {
         const std::u16string exit_category_u16 = category->to_std_string(target_thread->owning_process());
         finish_status_request_eka1(target_thread, finish_signal, epoc::error_none);
 
+        if (thr == target_thread) {
+            // A thread panicking itself (User::Panic): name the code on its stack, which is usually
+            // enough to tell who raised it.
+            kernel::process *pr = thr->owning_process();
+            arm::core *cpu = kern->get_cpu();
+            const address sp = cpu->get_reg(13);
+            std::string frames;
+            int found = 0;
+
+            for (std::uint32_t i = 0; (i < 256) && (found < 12); i++) {
+                std::uint32_t *slot = eka2l1::ptr<std::uint32_t>(sp + i * 4).get(pr);
+                if (!slot) {
+                    break;
+                }
+
+                const address value = *slot;
+                codeseg_ptr seg = get_codeseg_from_addr(kern, pr, value, false);
+                if (!seg || (value == seg->get_code_run_addr(pr))) {
+                    continue;
+                }
+
+                const std::vector<std::uint32_t> exports = seg->get_export_table(pr);
+                std::uint32_t best_ord = 0;
+                address best_addr = 0;
+                for (std::size_t e = 0; e < exports.size(); e++) {
+                    const address ex = exports[e] & ~1u;
+                    if ((ex <= value) && (ex >= best_addr)) {
+                        best_addr = ex;
+                        best_ord = static_cast<std::uint32_t>(e + 1);
+                    }
+                }
+
+                frames += fmt::format(" [sp+0x{:X}] {}+0x{:X} (ord {}+0x{:X})", i * 4, seg->name(), value - seg->get_code_run_addr(pr),
+                    best_ord, value - best_addr);
+                found++;
+            }
+
+            LOG_TRACE(KERNEL, "Panic {} {} raised by {}: lr=0x{:X}, stack:{}", common::ucs2_to_utf8(exit_category_u16), reason,
+                thr->name(), cpu->get_lr(), frames);
+        }
+
         if (!thr->kill(kernel::entity_exit_type::panic, exit_category_u16, reason)) {
             std::string thr_fullname;
             thr->full_name(thr_fullname);
