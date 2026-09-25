@@ -2488,6 +2488,32 @@ namespace eka2l1 {
                 return scancode | (modifiers << BIND_TARGET_MODIFIER_SHIFT);
             }
 
+            // The TEventModifier bit a modifier key's scan code holds down, or 0 for other keys.
+            std::uint32_t modifier_bit_of_scancode(const std::uint32_t scancode) {
+                switch (scancode) {
+                case std_key_left_shift:
+                    return event_modifier_left_shift;
+                case std_key_right_shift:
+                    return event_modifier_right_shift;
+                case std_key_left_alt:
+                    return event_modifier_left_alt;
+                case std_key_right_alt:
+                    return event_modifier_right_alt;
+                case std_key_left_ctrl:
+                    return event_modifier_left_ctrl;
+                case std_key_right_ctrl:
+                    return event_modifier_right_ctrl;
+                case std_key_left_func:
+                    return event_modifier_left_func;
+                case std_key_right_func:
+                    return event_modifier_right_func;
+                default:
+                    break;
+                }
+
+                return 0;
+            }
+
             // EKA2L1_KEYLOG=1 logs every host key and what the device's tables made of it.
             bool key_log_enabled() {
                 static const bool enabled = (std::getenv("EKA2L1_KEYLOG") != nullptr);
@@ -2746,6 +2772,25 @@ namespace eka2l1 {
         key_shipper.start_shipping();
     }
 
+    void window_server::reconcile_translated_modifiers() {
+        static const std::pair<std::uint32_t, std::uint32_t> TYPED_MODIFIERS[] = {
+            { epoc::std_key_left_shift, epoc::event_modifier_left_shift },
+            { epoc::std_key_right_shift, epoc::event_modifier_right_shift },
+            { epoc::std_key_left_func, epoc::event_modifier_left_func },
+            { epoc::std_key_right_func, epoc::event_modifier_right_func }
+        };
+
+        for (const auto &[scancode, bit] : TYPED_MODIFIERS) {
+            auto holders = host_modifier_keys_.find(scancode);
+            const bool want = (holders != host_modifier_keys_.end()) && (holders->second > 0);
+            const bool have = (key_translator_->modifier_state() & bit) != 0;
+
+            if (want != have) {
+                ship_raw_translated_key(scancode, !want, 0);
+            }
+        }
+    }
+
     bool window_server::handle_translated_key_input(const drivers::input_event &input_event) {
         const bool key_up = (input_event.key_.state_ == drivers::key_state::released);
         const bool raw_input = (input_event.type_ == drivers::input_event_type::key_raw);
@@ -2777,13 +2822,22 @@ namespace eka2l1 {
 
             if (held.by_character) {
                 ship_key_by_character(held.scancode, held.code, held.modifiers, true);
+            } else if (const std::uint32_t bit = epoc::modifier_bit_of_scancode(held.scancode)) {
+                // A modifier key goes up on the device when the last host key holding it does, and only
+                // if a typed key has not lifted it already.
+                int &holders = host_modifier_keys_[held.scancode];
+                holders = std::max(holders - 1, 0);
+
+                if ((holders == 0) && (key_translator_->modifier_state() & bit)) {
+                    ship_raw_translated_key(held.scancode, true, 0);
+                }
             } else {
                 ship_raw_translated_key(held.scancode, true, held.code);
             }
 
-            // Put the modifier keys back the way the host holds them.
-            for (auto undo = held.undo.rbegin(); undo != held.undo.rend(); undo++) {
-                ship_raw_translated_key(undo->first, undo->second, 0);
+            if (held.typed) {
+                // Shift and Chr back to what the host holds now (it may have let go in between).
+                reconcile_translated_modifiers();
             }
 
             return true;
@@ -2797,11 +2851,25 @@ namespace eka2l1 {
         held_host_key held;
 
         auto press_raw = [&](const std::uint32_t scancode) {
+            held.scancode = scancode;
+            held.by_character = false;
+
+            if (const std::uint32_t bit = epoc::modifier_bit_of_scancode(scancode)) {
+                // Count the host keys holding a device modifier (Alt and AltGr both hold Chr), and press it
+                // on the device only if it is not down already.
+                host_modifier_keys_[scancode]++;
+
+                if (!(key_translator_->modifier_state() & bit)) {
+                    ship_raw_translated_key(scancode, false, 0);
+                }
+
+                held_host_keys_[host_id] = held;
+                return;
+            }
+
             const epoc::key_translator::result res = ship_raw_translated_key(scancode, false, 0);
 
-            held.scancode = scancode;
             held.code = (res.produced && (res.modifiers & epoc::event_modifier_repeatable)) ? res.code : 0;
-            held.by_character = false;
             held_host_keys_[host_id] = held;
         };
 
@@ -2820,7 +2888,6 @@ namespace eka2l1 {
         // key-down/key-up sequence the real keyboard produces.
         auto press_typed = [&](const std::uint32_t scancode, const std::uint32_t modifiers) {
             const std::uint32_t now = key_translator_->modifier_state();
-            std::vector<std::pair<std::uint32_t, bool>> undo;
 
             auto want = [&](const bool need, const std::uint32_t combined, const std::uint32_t left_bit, const std::uint32_t right_bit,
                             const std::uint32_t left_scancode, const std::uint32_t right_scancode) {
@@ -2828,16 +2895,13 @@ namespace eka2l1 {
 
                 if (need && !have) {
                     ship_raw_translated_key(left_scancode, false, 0);
-                    undo.emplace_back(left_scancode, true);
                 } else if (!need && have) {
                     if (now & left_bit) {
                         ship_raw_translated_key(left_scancode, true, 0);
-                        undo.emplace_back(left_scancode, false);
                     }
 
                     if (now & right_bit) {
                         ship_raw_translated_key(right_scancode, true, 0);
-                        undo.emplace_back(right_scancode, false);
                     }
                 }
             };
@@ -2848,7 +2912,7 @@ namespace eka2l1 {
                 epoc::event_modifier_right_func, epoc::std_key_left_func, epoc::std_key_right_func);
 
             press_raw(scancode);
-            held_host_keys_[host_id].undo = std::move(undo);
+            held_host_keys_[host_id].typed = true;
         };
 
         if (raw_input) {

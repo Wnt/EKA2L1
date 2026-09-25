@@ -468,10 +468,13 @@ namespace eka2l1 {
             std::uint32_t code = 0; ///< Key code produced on key down; identifies its auto-repeat.
             std::uint32_t modifiers = 0; ///< Modifiers of a character event that no key can type.
             bool by_character = false; ///< A character event that no key can type: not fed through the translator.
-            std::vector<std::pair<std::uint32_t, bool>> undo; ///< Modifier keys to release/press again after the key (scan code, key up).
+            bool typed = false; ///< Shift/Chr were pressed or lifted for it: put them back as the host holds them on release.
         };
 
-        std::unordered_map<std::uint32_t, held_host_key> held_host_keys_; ///< Host key code -> what it pressed.
+        std::unordered_map<std::uint32_t, held_host_key> held_host_keys_; ///< Host key id -> what it pressed.
+        std::unordered_map<std::uint32_t, int> host_modifier_keys_; ///< Device modifier scan code -> host keys holding it.
+
+        void reconcile_translated_modifiers();
 
         void init_key_translator();
         bool handle_translated_key_input(const drivers::input_event &input_event);
