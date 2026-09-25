@@ -686,6 +686,13 @@ namespace eka2l1 {
                 list = "Z:\\System\\Programs\\SecurityServer.exe";
             }
 
+            // EKA2L1_ROM_WSERV is a default-off EKA1/S80 feasibility experiment. The
+            // host window object is only a display adapter in this mode; ewsrv owns
+            // Windowserver. Keep HLE FBS for the first experiment.
+            if (sys->get_symbian_version_use() == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV")) {
+                list = "Z:\\System\\Libs\\ewsrv.exe;" + list;
+            }
+
             std::size_t start = 0;
             while (start < list.size()) {
                 std::size_t end = list.find(';', start);

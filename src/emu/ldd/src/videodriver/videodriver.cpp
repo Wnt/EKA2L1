@@ -29,6 +29,7 @@
 #include <system/hal.h>
 
 #include <string>
+#include <cstdlib>
 
 namespace eka2l1::ldd {
     static const std::string VIDEO_DRIVER_FACTORY_NAME = "VideoDriver";
@@ -137,6 +138,26 @@ namespace eka2l1::ldd {
         const eka2l1::ptr<void> arg2) {
         if (kern->get_epoc_version() == epocver::epoc70) {
             return do_control_epoc70(r, n, arg1, arg2);
+        }
+
+        if (kern->get_epoc_version() == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV")) {
+            // RAE-6 hal.dll: controls 8/9 are hardware mode index/count (not
+            // TDisplayMode); control 16 takes that index by value and a video-info
+            // descriptor in arg2. The fixed kiosk panel exposes one RGB565 mode.
+            if (n == 8 || n == 9 || n == 13 || n == 3 || n == 4) {
+                auto *value = reinterpret_cast<std::int32_t *>(arg1.get(r->owning_process()));
+                if (!value) {
+                    return epoc::error_argument;
+                }
+                *value = (n == 9 || n == 13 || n == 4) ? 1 : 0;
+                return epoc::error_none;
+            }
+            if (n == 16) {
+                if (arg1.ptr_address() != 0) {
+                    return epoc::error_argument;
+                }
+                return get_screen_info(r, n, arg2, {});
+            }
         }
 
         switch (n) {

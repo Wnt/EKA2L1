@@ -1445,6 +1445,12 @@ namespace eka2l1::epoc {
 
 namespace eka2l1 {
     std::string get_winserv_name_by_epocver(const epocver ver) {
+        // ROM-window-server spike: retain the host screen/input adapter used by Qt and HAL,
+        // but leave the guest's well-known IPC name for ewsrv.exe. All callers of this
+        // helper locate the host adapter; guest name lookup uses the literal ROM name.
+        if (ver == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV")) {
+            return "EKA2L1HostDisplay";
+        }
         if (ver < epocver::eka2) {
             return "Windowserver";
         }

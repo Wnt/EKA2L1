@@ -5155,6 +5155,15 @@ namespace eka2l1::epoc {
 
         const epocver kver = kern->get_epoc_version();
 
+        if (kver == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV") && (attribute & 0xFF) == 0x52) {
+            // UserSvr::ChangeLocale(RLibrary), decoded from RAE-6 EUser ordinal 159.
+            // Bootstrap stub: the HLE kernel already supplies its locale and language
+            // tables. Complete the executor's status as well as its synchronous result.
+            LOG_INFO(KERNEL, "ROM wserv: ChangeLocale bootstrap stub keeps the HLE locale");
+            finish_status_request_eka1(crr_thread, finish_signal, epoc::error_none);
+            return epoc::error_none;
+        }
+
         if ((kver == epocver::epoc6) || (kver == epocver::epoc70)) {
             switch (attribute & 0xFF) {
             case epoc::eka1_executor::execute_v6_create_chunk_normal:
