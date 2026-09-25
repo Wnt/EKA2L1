@@ -63,6 +63,7 @@ namespace eka2l1::epoc {
     struct window;
     struct window_group;
     struct screen;
+    struct anim_executor;
 
     enum focus_change_property {
         focus_change_target,
@@ -142,6 +143,9 @@ namespace eka2l1::epoc {
 
         bool direct_framebuffer_mapped = false;
         framebuffer_observer direct_framebuffer;
+
+        // Every animation (RAnim) on a window of this screen. Clocks tick through the screen's redraws.
+        std::vector<anim_executor *> anims_;
 
         enum {
             FLAG_NEED_RECALC_VISIBLE = 1 << 0,
@@ -290,6 +294,17 @@ namespace eka2l1::epoc {
 
         void deinit(drivers::graphics_driver *driver);
         bool redraw(drivers::graphics_command_builder &builder, const bool need_bind);
+
+        /**
+         * \brief Whether an animation on a visible window shows something it has not drawn yet (a clock ticked).
+         */
+        bool anims_need_redraw();
+
+        /**
+         * \brief Time until the soonest animation on a visible window changes by itself.
+         * \returns False if none will.
+         */
+        bool next_anim_update(std::uint64_t &delay_us);
 
         /**
          * \brief Where the focused group's text cursor is, if it is on screen at all (window visibility

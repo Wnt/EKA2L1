@@ -33,6 +33,7 @@ set(CORE_TEST_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/surface.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/scale.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/protocol.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/services/window/clock.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/centralrepo/crebinloader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/domain/domain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/framework/objects.cpp
