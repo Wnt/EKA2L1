@@ -529,6 +529,13 @@ namespace eka2l1 {
         epoc::bitwise_bitmap *get_bitmap(const std::uint32_t h);
         fbsbitmap *get_raw_fbsbitmap(const std::uint32_t h);
 
+        // EKA1 ROM bitmaps (the CBitwiseBitmaps of a ROM image MBM) are used in place: the client's
+        // CFbsBitmap::Load finds the file with RFs::IsFileInRom and its Handle() is then the bitmap's ROM
+        // address, which names nothing in the FBS object table. These wrappers make such an address
+        // drawable; they are created on first use and live as long as the window server.
+        fbsbitmap *get_eka1_rom_bitmap(const std::uint32_t addr);
+        std::unordered_map<std::uint32_t, std::unique_ptr<fbsbitmap>> eka1_rom_bitmaps_;
+
         epoc::window_group *get_group_from_id(const epoc::ws::uid id);
         epoc::window_group *get_starting_group();
 

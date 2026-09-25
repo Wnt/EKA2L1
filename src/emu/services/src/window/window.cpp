@@ -2797,7 +2797,7 @@ namespace eka2l1 {
     }
 
     epoc::bitwise_bitmap *window_server::get_bitmap(const std::uint32_t h) {
-        fbsbitmap *bmp = get_fbs_server()->get<fbsbitmap>(h);
+        fbsbitmap *bmp = get_raw_fbsbitmap(h);
         if (bmp) {
             bmp = bmp->final_clean();
             return bmp->bitmap_;
@@ -2806,8 +2806,58 @@ namespace eka2l1 {
         return nullptr;
     }
 
+    fbsbitmap *window_server::get_eka1_rom_bitmap(const std::uint32_t addr) {
+        kernel_system *kern = sys->get_kernel_system();
+        if (!kern->is_eka1()) {
+            return nullptr;
+        }
+
+        auto cached = eka1_rom_bitmaps_.find(addr);
+        if (cached != eka1_rom_bitmaps_.end()) {
+            return cached->second.get();
+        }
+
+        loader::rom *rom = kern->get_rom_info();
+        if (!rom || (addr < rom->header.rom_base) || (addr - rom->header.rom_base >= rom->header.rom_size)
+            || (rom->header.rom_size - (addr - rom->header.rom_base) < sizeof(epoc::bitwise_bitmap))) {
+            return nullptr;
+        }
+
+        epoc::bitwise_bitmap *bw = eka2l1::ptr<epoc::bitwise_bitmap>(addr).get(sys->get_memory_system());
+        if (!bw || (bw->uid_ != epoc::bitwise_bitmap_uid) || (bw->header_.size_pixels.x <= 0) || (bw->header_.size_pixels.y <= 0)
+            || (bw->header_.size_pixels.x > 4096) || (bw->header_.size_pixels.y > 4096)) {
+            return nullptr;
+        }
+
+        // No server: nothing to free when it goes. One reference is ours, so the draw store's
+        // ref/deref pairs never bring it to zero.
+        auto wrapper = std::make_unique<fbsbitmap>(nullptr, bw, true, false);
+        wrapper->ref();
+
+        LOG_TRACE(SERVICE_WINDOW, "EKA1 ROM bitmap at 0x{:X}: {}x{}, {} bpp", addr, bw->header_.size_pixels.x,
+            bw->header_.size_pixels.y, bw->header_.bit_per_pixels);
+
+        fbsbitmap *result = wrapper.get();
+        eka1_rom_bitmaps_.emplace(addr, std::move(wrapper));
+        return result;
+    }
+
     fbsbitmap *window_server::get_raw_fbsbitmap(const std::uint32_t h) {
-        return get_fbs_server()->get<fbsbitmap>(h);
+        fbsbitmap *bmp = get_fbs_server()->get<fbsbitmap>(h);
+
+        if (!bmp && h) {
+            bmp = get_eka1_rom_bitmap(h);
+        }
+
+        if (!bmp && h) {
+            static std::uint32_t logged = 0;
+            if (logged < 64) {
+                logged++;
+                LOG_TRACE(SERVICE_WINDOW, "Bitmap handle 0x{:X} does not name an FBS bitmap", h);
+            }
+        }
+
+        return bmp;
     }
 
     void window_server::set_keyboard_repeat_rate(const std::uint64_t initial_time, const std::uint64_t next_time) {
