@@ -22,6 +22,7 @@
 #include <common/log.h>
 #include <common/cvt.h>
 #include <services/window/classes/gstore.h>
+#include <drivers/graphics/graphics.h>
 #include <services/window/util.h>
 #include <services/window/bitmap_cache.h>
 
@@ -118,7 +119,108 @@ namespace eka2l1::epoc {
         return new_segment_ptr;
     }
 
-    void gdi_store_command_collection::promote_last_segment() {
+    common::region gdi_store_segment_opaque_coverage(const gdi_store_command_segment &segment) {
+        common::region coverage;
+
+        // Clipping as the replay applies it: none, one rectangle or a region (window coordinates).
+        bool clipped = false;
+        common::region clip;
+        std::uint32_t draw_mode = gdi_draw_mode_pen;
+
+        const auto cover = [&](const eka2l1::rect &area) {
+            if ((area.size.x <= 0) || (area.size.y <= 0)) {
+                return;
+            }
+
+            if (!clipped) {
+                coverage.add_rect(area);
+                return;
+            }
+
+            common::region piece;
+            piece.add_rect(area);
+            coverage.add_region(piece.intersect(clip));
+        };
+
+        for (const gdi_store_command &command : segment.commands_) {
+            switch (command.opcode_) {
+            case gdi_store_command_set_clip_rect_single:
+                clipped = true;
+                clip.make_empty();
+                clip.add_rect(command.get_data_struct_const<gdi_store_command_set_clip_rect_single_data>().clipping_rect_);
+                break;
+
+            case gdi_store_command_set_clip_rect_multiple: {
+                const auto &data = command.get_data_struct_const<gdi_store_command_set_clip_rect_multiple_data>();
+                clipped = true;
+                clip.make_empty();
+                for (std::uint32_t i = 0; i < data.rect_count_; i++) {
+                    clip.add_rect(data.rects_[i]);
+                }
+                break;
+            }
+
+            case gdi_store_command_disable_clip:
+                clipped = false;
+                break;
+
+            case gdi_store_command_set_draw_mode:
+                draw_mode = command.get_data_struct_const<gdi_store_command_set_draw_mode_data>().mode_;
+                break;
+
+            case gdi_store_command_draw_rect: {
+                // Only a fill that replaces the pixels: an opaque colour in a plain mode.
+                const auto &data = command.get_data_struct_const<gdi_store_command_draw_rect_data>();
+                eka2l1::vec4 color = data.color_;
+                gdi_draw_mode_pass passes[2];
+                if ((data.color_.w == 255) && (gdi_expand_draw_mode(draw_mode, color, passes) == 0)) {
+                    cover(data.rect_);
+                }
+                break;
+            }
+
+            case gdi_store_command_draw_bitmap: {
+                // An unmasked blit of a bitmap without alpha replaces its rectangle too.
+                const auto &data = command.get_data_struct_const<gdi_store_command_draw_bitmap_data>();
+                if (data.mask_fbs_bitmap_ || !data.main_fbs_bitmap_) {
+                    break;
+                }
+
+                const epoc::bitwise_bitmap *bw = (data.gdi_flags_ & GDI_STORE_COMMAND_MAIN_RAW)
+                    ? reinterpret_cast<const epoc::bitwise_bitmap *>(data.main_fbs_bitmap_)
+                    : reinterpret_cast<fbsbitmap *>(data.main_fbs_bitmap_)->final_clean()->bitmap_;
+
+                if (!bw || epoc::is_display_mode_alpha(bw->settings_.current_display_mode())) {
+                    break;
+                }
+
+                eka2l1::rect area = data.dest_rect_;
+                const eka2l1::vec2 source_size = ((data.source_rect_.size.x == 0) && (data.source_rect_.size.y == 0))
+                    ? eka2l1::vec2(bw->header_.size_pixels) : eka2l1::vec2(data.source_rect_.size);
+
+                if ((area.size.x == 0) && (area.size.y == 0)) {
+                    area.size = source_size;
+                }
+
+                if (data.gdi_flags_ & GDI_STORE_COMMAND_BLIT) {
+                    // A blit never reaches past the bitmap.
+                    area.size.x = std::min<int>(area.size.x, bw->header_.size_pixels.x - data.source_rect_.top.x);
+                    area.size.y = std::min<int>(area.size.y, bw->header_.size_pixels.y - data.source_rect_.top.y);
+                }
+
+                cover(area);
+                break;
+            }
+
+            default:
+                break;
+            }
+        }
+
+        return coverage;
+    }
+
+    void gdi_store_command_collection::promote_last_segment(const bool background_clears) {
         if (segments_.empty()) {
             return;
         }
@@ -140,10 +242,21 @@ namespace eka2l1::epoc {
             return;
         }
 
-        for (std::size_t i = 0; i < lastest_segment->region_.rects_.size(); i++) {
+        // What the new redraw replaces in the older segments. A window with a background colour is cleared
+        // over the whole redraw rectangle first, so everything under it goes. A window without one
+        // (RWindow::SetNoBackgroundColor, which most Series 80 controls use) keeps on screen whatever the
+        // redraw does not paint over: WSERV 7.0s has no redraw store, the old pixels just stay. Dropping the
+        // older segments there left those pixels unpainted (black) at the next recomposition, e.g. the
+        // band under the name in a Contacts card, which the pane's later partial redraws never repaint.
+        common::region replaced = lastest_segment->region_;
+        if (!background_clears) {
+            replaced = lastest_segment->region_.intersect(gdi_store_segment_opaque_coverage(*lastest_segment));
+        }
+
+        for (std::size_t i = 0; i < replaced.rects_.size(); i++) {
             for (std::size_t j = 0; j < segments_.size(); ) {
                 if (segments_[j]->type_ != gdi_store_command_segment_pending_redraw) {
-                    segments_[j]->region_.eliminate(lastest_segment->region_.rects_[i]);
+                    segments_[j]->region_.eliminate(replaced.rects_[i]);
 
                     if (segments_[j]->region_.empty()) {
                         segments_.erase(segments_.begin() + j);
@@ -157,6 +270,25 @@ namespace eka2l1::epoc {
         }
 
         lastest_segment->type_ = gdi_store_command_segment_redraw;
+
+        // Kept-under segments must not pile up without end when a window keeps redrawing without ever
+        // painting some area opaquely: past the limit the oldest go (as they all did before).
+        std::size_t redraw_segments = 0;
+        for (const auto &segment : segments_) {
+            if (segment->type_ == gdi_store_command_segment_redraw) {
+                redraw_segments++;
+            }
+        }
+
+        for (std::size_t j = 0; (redraw_segments > LIMIT_REDRAW_SEGMENTS) && (j < segments_.size()); ) {
+            if ((segments_[j]->type_ == gdi_store_command_segment_redraw) && (segments_[j].get() != lastest_segment)
+                && (segments_[j].get() != current_segment_)) {
+                segments_.erase(segments_.begin() + j);
+                redraw_segments--;
+            } else {
+                j++;
+            }
+        }
     }
 
     bool gdi_store_command_collection::clean_old_nonredraw_segments() {
@@ -274,6 +406,42 @@ namespace eka2l1::epoc {
         passes[0] = { invert(opaque), drivers::blend_factor::current_color, drivers::blend_factor::zero };
         passes[1] = { eka2l1::vec4(255, 255, 255, 255), drivers::blend_factor::one_minus_current_color, drivers::blend_factor::zero };
         return 2;
+    }
+
+    void gdi_submit_texture_updates(drivers::graphics_driver *driver, bitmap_cache &bcache,
+        std::initializer_list<const gdi_store_command *> updates) {
+        if (!driver) {
+            return;
+        }
+
+        drivers::graphics_command_builder builder;
+        gdi_command_builder gdi_builder(driver, builder, bcache, drivers::filter_option::linear, eka2l1::vec2(0, 0), 1.0f,
+            common::region{});
+
+        bool any = false;
+        for (const gdi_store_command *update : updates) {
+            if (update && (update->opcode_ == gdi_store_command_update_texture)) {
+                gdi_builder.build_single_command(*update);
+                any = true;
+            }
+        }
+
+        if (any) {
+            drivers::command_list list = builder.retrieve_command_list();
+            driver->submit_command_list(list);
+        }
+    }
+
+    eka2l1::rect masked_blit_brush_area(const eka2l1::vec2 &dest_top, const eka2l1::rect &source_rect, const eka2l1::vec2 &bitmap_size) {
+        eka2l1::rect area(dest_top, source_rect.size);
+        if ((area.size.x == 0) && (area.size.y == 0)) {
+            area.size = bitmap_size;
+        }
+
+        // The blit never reaches past the source bitmap.
+        area.size.x = std::max<int>(0, std::min<int>(area.size.x, bitmap_size.x - source_rect.top.x));
+        area.size.y = std::max<int>(0, std::min<int>(area.size.y, bitmap_size.y - source_rect.top.y));
+        return area;
     }
 
     gdi_command_builder::gdi_command_builder(drivers::graphics_driver *drv, drivers::graphics_command_builder &builder, bitmap_cache &bcache,

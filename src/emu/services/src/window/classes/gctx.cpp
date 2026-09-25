@@ -491,6 +491,26 @@ namespace eka2l1::epoc {
         attached_window->add_draw_command(draw_bmp_cmd);
     }
 
+    void graphic_context::fill_masked_blit_background(const eka2l1::vec2 &dest_top, const eka2l1::rect &source_rect,
+        epoc::bitwise_bitmap *source, epoc::bitwise_bitmap *mask) {
+        // CFbsBitGc::BitBltMasked with a binary mask and a brush set fills the destination rectangle with
+        // the brush first, so the pixels the mask keeps out show the brush, not what was under them.
+        // Series 80's EikSrv relies on it: the focused dialog field under an open choice list and the
+        // list's scroll bar are masked blits over SetBrushStyle(ESolidBrush) + white, into windows with
+        // no background colour (the list rows blit with ENullBrush and keep their highlight). The
+        // alpha-blended (EGray256) path does not use the brush.
+        if ((fill_mode == brush_style::null) || !source || !mask) {
+            return;
+        }
+
+        const epoc::display_mode mask_mode = mask->settings_.current_display_mode();
+        if ((mask_mode == epoc::display_mode::gray256) || epoc::is_display_mode_alpha(mask_mode)) {
+            return;
+        }
+
+        fill_with_brush(epoc::masked_blit_brush_area(dest_top, source_rect, source->header_.size_pixels));
+    }
+
     void graphic_context::ws_draw_bitmap_masked(service::ipc_context &context, ws_cmd &cmd) {
         ws_cmd_draw_ws_bitmap_masked *blt_cmd = reinterpret_cast<ws_cmd_draw_ws_bitmap_masked *>(cmd.data_ptr);
 
@@ -542,6 +562,7 @@ namespace eka2l1::epoc {
         if (blt_cmd->invert_mask)
             flags |= 1;
 
+        fill_masked_blit_background(dest_rect.top, source_rect, bmp->final_clean()->bitmap_, masked->final_clean()->bitmap_);
         draw_mask_impl(bmp, masked, dest_rect, source_rect, flags);
         context.complete(epoc::error_none);
     }
@@ -572,6 +593,12 @@ namespace eka2l1::epoc {
         void *source_bmp_to_pass = decide_bitmap_pointer_to_pass(myside_source_bmp, flags, false);
         void *mask_bmp_to_pass = decide_bitmap_pointer_to_pass(myside_mask_bmp, flags, true);
 
+        epoc::bitwise_bitmap *source_bw = (flags & GDI_STORE_COMMAND_MAIN_RAW) ? reinterpret_cast<epoc::bitwise_bitmap *>(source_bmp_to_pass)
+                                                                              : reinterpret_cast<fbsbitmap *>(source_bmp_to_pass)->final_clean()->bitmap_;
+        epoc::bitwise_bitmap *mask_bw = (flags & GDI_STORE_COMMAND_MASK_RAW) ? reinterpret_cast<epoc::bitwise_bitmap *>(mask_bmp_to_pass)
+                                                                            : reinterpret_cast<fbsbitmap *>(mask_bmp_to_pass)->final_clean()->bitmap_;
+
+        fill_masked_blit_background(dest_rect.top, source_rect, source_bw, mask_bw);
         draw_mask_impl(source_bmp_to_pass, mask_bmp_to_pass, dest_rect, source_rect, flags);
         context.complete(epoc::error_none);
     }

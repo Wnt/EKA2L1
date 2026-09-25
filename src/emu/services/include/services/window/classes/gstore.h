@@ -28,6 +28,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 
 namespace eka2l1::drivers {
@@ -250,6 +251,10 @@ namespace eka2l1::epoc {
         void add_command(gdi_store_command &cmd, bitmap_cache *cache = nullptr);
     };
 
+    // The part of a segment's window that its commands paint opaquely (plain-mode opaque fills and
+    // unmasked blits of bitmaps without alpha), clipped as the replay clips them.
+    common::region gdi_store_segment_opaque_coverage(const gdi_store_command_segment &segment);
+
     class gdi_store_command_collection {
     private:
         std::vector<std::unique_ptr<gdi_store_command_segment>> segments_;
@@ -259,11 +264,15 @@ namespace eka2l1::epoc {
         static constexpr std::uint32_t LIMIT_NON_REDRAW_SEGMENTS = 20;
         static constexpr std::int32_t KEEP_NON_REDRAW_SEGMENTS = 12;
         static constexpr std::uint64_t AGE_LIMIT_NONREDRAW_US = 1000000;
+        static constexpr std::size_t LIMIT_REDRAW_SEGMENTS = 32;
 
         explicit gdi_store_command_collection();
 
         gdi_store_command_segment *add_new_segment(const eka2l1::rect &draw_rect, const gdi_store_command_segment_type type_);
-        void promote_last_segment();
+        // Ends a redraw. background_clears: the window has a background colour, so the redraw rectangle
+        // was cleared and replaces everything older under it. Without one, only what the redraw paints
+        // opaquely replaces older content (gdi_store_segment_opaque_coverage).
+        void promote_last_segment(const bool background_clears = true);
         
         // Returns true if this must cause an invalidation
         bool clean_old_nonredraw_segments();
@@ -277,6 +286,15 @@ namespace eka2l1::epoc {
             return segments_;
         }
     };
+
+    // Builds texture update commands (gdi_store_command_update_texture) and submits them to the driver at
+    // once, so an upload the bitmap cache has promised never depends on some window being drawn later.
+    void gdi_submit_texture_updates(drivers::graphics_driver *driver, bitmap_cache &bcache,
+        std::initializer_list<const gdi_store_command *> updates);
+
+    // The rectangle a BitBltMasked with a brush fills before the masked draw: the blitted part of the
+    // source (all of it for an empty source rectangle), clipped to the source bitmap.
+    eka2l1::rect masked_blit_brush_area(const eka2l1::vec2 &dest_top, const eka2l1::rect &source_rect, const eka2l1::vec2 &bitmap_size);
 
     class gdi_command_builder {
     private:
