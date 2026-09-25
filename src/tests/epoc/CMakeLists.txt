@@ -34,6 +34,7 @@ set(CORE_TEST_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/rom_mode.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/glyph_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/bitmap.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/freetypemetrics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/fontmatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/gdrmetrics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/pen_advance.cpp

@@ -480,8 +480,6 @@ namespace eka2l1::epoc::adapter {
         return true;
     }
 
-    static constexpr float DESIGN_SIZE_SCALE = 9.0f / 10.0f;
-
     std::optional<open_font_metrics> freetype_font_adapter::get_nearest_supported_metric(const std::size_t face_index, const std::uint16_t targeted_font_size, std::uint32_t *metric_identifier,
         bool is_design_font_size) {
         if (face_index >= faces_.size()) {
@@ -489,10 +487,12 @@ namespace eka2l1::epoc::adapter {
         }
 
         auto face = faces_[face_index];
-        auto adjusted_font_size = is_design_font_size ? (static_cast<int>(static_cast<float>(targeted_font_size) * DESIGN_SIZE_SCALE)) :
+        // Design height is the requested em size in pixels. Scaling it here
+        // makes the returned design height disagree with the glyph advances.
+        auto adjusted_font_size = is_design_font_size ? targeted_font_size :
             derive_design_height_from_max_height(face, targeted_font_size);
 
-        auto fake_design_height = is_design_font_size ? targeted_font_size : adjusted_font_size;
+        auto design_height = is_design_font_size ? targeted_font_size : adjusted_font_size;
 
         if (!set_font_size(face_index, adjusted_font_size)) {
             return std::nullopt;
@@ -506,7 +506,7 @@ namespace eka2l1::epoc::adapter {
         metrics.max_width = ft_convention_to_int_pixel(face->size->metrics.max_advance);
         metrics.max_depth = 0;
         metrics.baseline_correction = 0;
-        metrics.design_height = static_cast<std::int16_t>(fake_design_height);
+        metrics.design_height = static_cast<std::int16_t>(design_height);
 
         if (metric_identifier) {
             *metric_identifier = adjusted_font_size;
