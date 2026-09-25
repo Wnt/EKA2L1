@@ -120,6 +120,24 @@ namespace eka2l1 {
         return drive_u16 + get_private_path_trim_uid(pr);
     }
 
+    // Symbian's file server has no entry for a drive's root directory: RFs::Entry, RFs::Att, RFs::SetEntry and
+    // RFs::SetAtt on "C:" or "C:\\" fail with KErrBadName. The Series 80 Messaging centre relies on it: at start it
+    // asks for the attributes of the message drive's root, and when that call succeeds it shows "Cannot find message
+    // storage. Try restoring from a backup." and then clears the root's attributes.
+    bool is_drive_root_path(const std::u16string &path) {
+        if ((path.length() < 2) || (path[1] != u':')) {
+            return false;
+        }
+
+        for (std::size_t i = 2; i < path.length(); i++) {
+            if (!is_separator(path[i])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     std::u16string get_full_symbian_path(const std::u16string &session_path, const std::u16string &target_path) {
         if (target_path.empty()) {
             return session_path;
@@ -834,6 +852,11 @@ namespace eka2l1 {
 
         LOG_INFO(SERVICE_EFSRV, "Get entry of: {}", common::ucs2_to_utf8(fname));
 
+        if (is_drive_root_path(fname)) {
+            ctx->complete(epoc::error_bad_name);
+            return;
+        }
+
         bool dir = false;
 
         io_system *io = ctx->sys->get_io_system();
@@ -865,6 +888,11 @@ namespace eka2l1 {
 
         const std::u16string fname = get_full_symbian_path(ss_path, fname_op.value());
         LOG_INFO(SERVICE_EFSRV, "Set entry of: {}", common::ucs2_to_utf8(fname));
+
+        if (is_drive_root_path(fname)) {
+            ctx->complete(epoc::error_bad_name);
+            return;
+        }
 
         io_system *io = ctx->sys->get_io_system();
 
