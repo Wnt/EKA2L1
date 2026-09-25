@@ -120,11 +120,14 @@ static eka2l1::drivers::input_event make_controller_event_driver(int jid, int bu
     return evt;
 }
 
-static eka2l1::drivers::input_event make_key_event_driver(const int key, const eka2l1::drivers::key_state key_state) {
+static eka2l1::drivers::input_event make_key_event_driver(const int key, const eka2l1::drivers::key_state key_state,
+    const std::uint32_t text = 0, const std::uint32_t native = 0) {
     eka2l1::drivers::input_event evt;
     evt.type_ = eka2l1::drivers::input_event_type::key;
     evt.key_.state_ = key_state;
     evt.key_.code_ = key;
+    evt.key_.text_ = text;
+    evt.key_.native_ = native;
 
     return evt;
 }
@@ -135,6 +138,20 @@ static void on_ui_window_key_release(void *userdata, const int key) {
 
     const std::lock_guard<std::mutex> guard(emu->lockdown);
     if (emu->ui_main && emu->ui_main->deliver_key_event(static_cast<std::uint32_t>(key), false)) {
+        return;
+    }
+    if (emu->winserv)
+        emu->winserv->queue_input_from_driver(key_evt);
+}
+
+static void on_ui_window_key_event(void *userdata, const std::uint32_t key, const std::uint32_t text, const std::uint32_t native,
+    const bool pressed) {
+    eka2l1::desktop::emulator *emu = reinterpret_cast<eka2l1::desktop::emulator *>(userdata);
+    auto key_evt = make_key_event_driver(static_cast<int>(key), pressed ? eka2l1::drivers::key_state::pressed : eka2l1::drivers::key_state::released,
+        text, native);
+
+    const std::lock_guard<std::mutex> guard(emu->lockdown);
+    if (emu->ui_main && emu->ui_main->deliver_key_event(key, pressed)) {
         return;
     }
     if (emu->winserv)
@@ -164,6 +181,7 @@ namespace eka2l1::desktop {
 
         state.window->raw_mouse_event = on_ui_window_mouse_evt;
         state.window->button_pressed = on_ui_window_key_press;
+        state.window->key_event_hook = on_ui_window_key_event;
         state.window->button_released = on_ui_window_key_release;
 
         state.window->init("Emulator display", eka2l1::vec2(800, 600), drivers::emu_window_flag_maximum_size);

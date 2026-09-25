@@ -129,6 +129,11 @@ namespace eka2l1 {
             /*! Call when a button is pressed. User sets their own call, shutdown and center button */
             std::function<void(void *, uint32_t)> button_pressed;
 
+            /*! Call when a key goes down or up: host key code, the character it types (UTF-32, 0 when none),
+                the host's physical key id (0 when unknown) and whether it went down. Preferred over
+                button_pressed/button_released. */
+            std::function<void(void *, uint32_t, uint32_t, uint32_t, bool)> key_event_hook;
+
             /*! Call when a button is released */
             std::function<void(void *, uint32_t)> button_released;
 
