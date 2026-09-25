@@ -124,6 +124,23 @@ namespace eka2l1::epoc {
         virtual bool draw(drivers::graphics_command_builder &builder) = 0;
 
         virtual void on_activate() = 0;
+
+        /**
+         * @brief Queue redraw events for the invalid region this window has kept but could not report.
+         *
+         * A window invalidated while hidden (not yet active, set invisible, or under a hidden
+         * parent) records the region and queues nothing, like WSERV. Called when it can be seen.
+         */
+        virtual void queue_pending_redraws() {}
+
+        /**
+         * @brief Queue the pending redraws of this window and of every descendant that can now be seen.
+         *
+         * WSERV folds an ancestor's hidden state into its children (CWsClientWindow::
+         * ResetHiddenFlagsInParentAndChildren), so activating or showing a window can make a
+         * whole subtree visible at once, including children that were activated before it.
+         */
+        void queue_pending_redraws_in_subtree();
         virtual void handle_extent_changed(const eka2l1::vec2 &new_size, const eka2l1::vec2 &new_pos) = 0;
         virtual void add_draw_command(gdi_store_command &command);
         virtual void prepare_for_draw() {}
@@ -303,6 +320,7 @@ namespace eka2l1::epoc {
 
         void invalidate(const eka2l1::rect &irect);
         void on_activate() override;
+        void queue_pending_redraws() override;
         void handle_extent_changed(const eka2l1::vec2 &new_size, const eka2l1::vec2 &new_pos) override;
         void add_draw_command(gdi_store_command &command) override;
         bool scroll(eka2l1::rect clip_space, const eka2l1::vec2 offset, eka2l1::rect source_rect) override;

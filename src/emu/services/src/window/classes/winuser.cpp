@@ -513,6 +513,12 @@ namespace eka2l1::epoc {
 
         if (vis) {
             flags |= flags_visible;
+
+            // What was invalidated while hidden, here or in a child, has to be redrawn now.
+            if (is_visible()) {
+                queue_pending_redraws_in_subtree();
+                client->trigger_redraw();
+            }
         } else {
             // Purge all queued events now that the window is not visible anymore
             client->walk_event(should_purge_canvas_base, this);
@@ -752,9 +758,28 @@ namespace eka2l1::epoc {
 
         if (is_visible()) {
             scr->need_update_visible_regions(true);
+
+            // Children activated before this window were invalidated while hidden; they can be seen now.
+            queue_pending_redraws_in_subtree();
+            client->trigger_redraw();
         }
 
         context.complete(epoc::error_none);
+    }
+
+    void canvas_base::queue_pending_redraws_in_subtree() {
+        if (!is_visible()) {
+            // Neither this window nor anything under it can be seen (is_visible() folds in the parent).
+            return;
+        }
+
+        queue_pending_redraws();
+
+        for (epoc::window *sub = child; sub; sub = sub->sibling) {
+            if (sub->type == epoc::window_kind::client) {
+                reinterpret_cast<canvas_base *>(sub)->queue_pending_redraws_in_subtree();
+            }
+        }
     }
 
     void canvas_base::scroll(service::ipc_context &context, ws_cmd &cmd) {
@@ -1330,6 +1355,18 @@ namespace eka2l1::epoc {
         if (is_visible()) {
             client->queue_redraw(this, to_queue);
             client->trigger_redraw();
+        }
+    }
+
+    void redraw_msg_canvas::queue_pending_redraws() {
+        if ((win_type != window_type::redraw) || redraw_region.empty() || !is_visible()) {
+            return;
+        }
+
+        // invalidate() keeps every invalidated rectangle in redraw_region until a BeginRedraw
+        // validates it, but only queues the redraw while the window can be seen.
+        for (const eka2l1::rect &pending : redraw_region.rects_) {
+            client->queue_redraw(this, pending);
         }
     }
 

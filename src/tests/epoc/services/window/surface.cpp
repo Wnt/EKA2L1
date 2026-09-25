@@ -18,6 +18,7 @@
 #include <services/fbs/bitmap.h>
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <map>
 #include <thread>
@@ -471,4 +472,79 @@ TEST_CASE("A redraw of a rectangle that covers no pixel leaves no segment behind
 
     REQUIRE(store.get_segments().size() == 1);
     REQUIRE(store.get_segments()[0]->type_ == epoc::gdi_store_command_segment_redraw);
+}
+
+TEST_CASE("A masked blit reads an EColor4K mask from the channel its texture keeps red in", "[gdi_store]") {
+    // EColor4K uploads as RGBA4444 holding 0RGB and the driver swizzles it (G, B, A, 1): red sits in
+    // the texture's green channel, and the texture's red channel is the zero top nibble. The mask
+    // shader reads red, so a 12bpp mask read through (R, G, B, R) masked nothing, and the Series 80
+    // icons that carry EColor4K masks (drawn inverted) came out as solid key-colour boxes.
+    surface_driver driver;
+    epoc::bitmap_cache cache(nullptr);
+    drivers::graphics_command_builder builder;
+    const auto ui = drivers::create_bitmap(&driver, { 1, 1 }, 32);
+    const auto source_texture = drivers::create_bitmap(&driver, { 1, 1 }, 16);
+    const auto mask_texture = drivers::create_bitmap(&driver, { 1, 1 }, 12);
+    builder.bind_bitmap(ui);
+    common::region clip;
+    clip.add_rect(rect({ 0, 0 }, { 1, 1 }));
+    epoc::gdi_command_builder gdi(&driver, builder, cache, drivers::filter_option::nearest,
+        { 0, 0 }, 1.0f, clip, false);
+
+    epoc::bitwise_bitmap source{};
+    source.uid_ = epoc::bitwise_bitmap_uid;
+    source.header_.size_pixels = object_size(1, 1);
+    source.header_.bit_per_pixels = 16;
+    source.settings_.current_display_mode(epoc::display_mode::color64k);
+
+    epoc::bitwise_bitmap mask = source;
+
+    epoc::gdi_store_command draw;
+    draw.opcode_ = epoc::gdi_store_command_draw_bitmap;
+    auto &data = draw.get_data_struct<epoc::gdi_store_command_draw_bitmap_data>();
+    data = {};
+    data.main_fbs_bitmap_ = &source;
+    data.mask_fbs_bitmap_ = &mask;
+    data.main_drv_ = source_texture;
+    data.mask_drv_ = mask_texture;
+    data.gdi_flags_ = epoc::GDI_STORE_COMMAND_MAIN_RAW | epoc::GDI_STORE_COMMAND_MASK_RAW
+        | epoc::GDI_STORE_COMMAND_INVERT_MASK | epoc::GDI_STORE_COMMAND_BLIT;
+    data.source_rect_ = rect({ 0, 0 }, { 1, 1 });
+
+    using swizzle = drivers::channel_swizzle;
+    using swizzle_set = std::array<swizzle, 4>;
+
+    const auto mask_swizzles = [&]() {
+        std::vector<swizzle_set> found;
+        gdi.build_single_command(draw);
+        auto commands = builder.retrieve_command_list();
+        for (std::size_t i = 0; i < commands.size_; ++i) {
+            const auto &command = commands.base_[i];
+            if ((command.opcode_ == drivers::graphics_driver_set_swizzle) && (command.data_[0] == mask_texture)) {
+                swizzle_set channels;
+                drivers::unpack_u64_to_2u32(command.data_[1], channels[0], channels[1]);
+                drivers::unpack_u64_to_2u32(command.data_[2], channels[2], channels[3]);
+                found.push_back(channels);
+            }
+        }
+        delete[] commands.base_;
+        return found;
+    };
+
+    SECTION("EColor4K: red from the texture's green channel, then the driver's own order back") {
+        mask.header_.bit_per_pixels = 12;
+        mask.settings_.current_display_mode(epoc::display_mode::color4k);
+
+        const auto found = mask_swizzles();
+        REQUIRE(found.size() == 2);
+        REQUIRE(found[0] == swizzle_set{ swizzle::green, swizzle::blue, swizzle::alpha, swizzle::green });
+        REQUIRE(found[1] == swizzle_set{ swizzle::green, swizzle::blue, swizzle::alpha, swizzle::one });
+    }
+
+    SECTION("EColor64K keeps red in red") {
+        const auto found = mask_swizzles();
+        REQUIRE(found.size() == 2);
+        REQUIRE(found[0] == swizzle_set{ swizzle::red, swizzle::green, swizzle::blue, swizzle::red });
+        REQUIRE(found[1] == swizzle_set{ swizzle::red, swizzle::green, swizzle::blue, swizzle::alpha });
+    }
 }

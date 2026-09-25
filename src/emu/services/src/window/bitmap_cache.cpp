@@ -186,7 +186,7 @@ namespace eka2l1::epoc {
         return return_ptr;
     }
 
-    static std::uint32_t get_suitable_bpp_for_bitmap(epoc::bitwise_bitmap *bmp) {
+    std::uint32_t get_suitable_bpp_for_bitmap(epoc::bitwise_bitmap *bmp) {
         if (bmp->uid_ != epoc::bitwise_bitmap_uid) {
             // Extended bitmap, will be converted to RGBA8888
             return 32;
