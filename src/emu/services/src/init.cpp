@@ -251,6 +251,71 @@ namespace eka2l1::epoc {
 }
 
 namespace eka2l1 {
+    // EKA2L1_STUB_SERVERS="<name>[;<name>...]" (diagnostic): register an HLE server of each name that
+    // accepts every connection, completes every synchronous request with KErrNone and leaves every
+    // asynchronous one pending. It stands in for a ROM server that cannot run yet, so a wall behind
+    // it can be reached (race ahead) while the real server is being fixed. Every request is logged.
+    class stub_server : public service::typical_server {
+    public:
+        explicit stub_server(eka2l1::system *sys, const std::string &name)
+            : service::typical_server(sys, name) {
+        }
+
+        void connect(service::ipc_context &context) override;
+    };
+
+    struct stub_session : public service::typical_session {
+        explicit stub_session(service::typical_server *serv, const kernel::uid ss_id, epoc::version client_version)
+            : service::typical_session(serv, ss_id, client_version) {
+        }
+
+        void fetch(service::ipc_context *ctx) override {
+            const std::string client = ctx->msg->own_thr ? ctx->msg->own_thr->name() : std::string("?");
+            if (ctx->msg->type == ipc_message_type_sync) {
+                LOG_WARN(KERNEL, "Stub server {}: op {} from {} completed with KErrNone", server<stub_server>()->name(),
+                    ctx->msg->function, client);
+                ctx->complete(epoc::error_none);
+                return;
+            }
+
+            LOG_WARN(KERNEL, "Stub server {}: async op {} from {} left pending", server<stub_server>()->name(),
+                ctx->msg->function, client);
+        }
+    };
+
+    void stub_server::connect(service::ipc_context &context) {
+        create_session<stub_session>(&context);
+        context.complete(epoc::error_none);
+    }
+
+    static void create_stub_servers(system *sys) {
+        const char *env = std::getenv("EKA2L1_STUB_SERVERS");
+        if (!env) {
+            return;
+        }
+
+        const std::string list = env;
+        std::size_t start = 0;
+        while (start < list.size()) {
+            std::size_t end = list.find(';', start);
+            if (end == std::string::npos) {
+                end = list.size();
+            }
+
+            const std::string name = list.substr(start, end - start);
+            start = end + 1;
+            if (name.empty()) {
+                continue;
+            }
+
+            std::unique_ptr<service::server> svr = std::make_unique<stub_server>(sys, name);
+            sys->get_kernel_system()->add_custom_server(svr);
+            LOG_WARN(KERNEL, "Stub server {} registered (EKA2L1_STUB_SERVERS)", name);
+        }
+    }
+}
+
+namespace eka2l1 {
     namespace service {
         // Mostly replace startup process of a normal EPOC startup
         void init_services(system *sys) {
@@ -425,6 +490,8 @@ namespace eka2l1 {
                     kern->add_custom_server(aud_serv);
                 }
             }
+
+            create_stub_servers(sys);
 
             epoc::initialize_system_properties(sys, cfg);
             init_symbian_app_launch_to_host_launch(sys);
