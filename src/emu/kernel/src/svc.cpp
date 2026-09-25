@@ -5928,24 +5928,35 @@ namespace eka2l1::epoc {
 
     BRIDGE_FUNC(std::int32_t, bus_dev_open_socket, const std::uint32_t unkpadding, epoc::desc16 *ldd_name,
         epoc::desc16 *pdd_name) {
+        kernel::process *own_pr = kern->crr_process();
+
+        if (ldd_name) {
+            LOG_TRACE(KERNEL, "Ldd name: {}, Pdd name: {}", common::ucs2_to_utf8(ldd_name->to_std_string(own_pr)),
+                pdd_name ? common::ucs2_to_utf8(pdd_name->to_std_string(own_pr)) : std::string());
+        }
+
+        // Past Symbian OS 6.x this call is only the first half of a channel open: RBusLogicalChannel
+        // goes on to the create-logical-channel executor (execute_v80_create_logical_channel), which
+        // makes the channel and hands back its handle, and it goes there only when this call returned
+        // KErrNone. Answering with a channel handle here sent every Nokia 9300 (7.0s) app, at its
+        // first VideoDriver open, down executor 0x42 instead, which nothing serves: the app parked on
+        // its request semaphore before its first frame. Keep upstream's answer there.
+        if (kern->get_epoc_version() > epocver::epoc6) {
+            LOG_TRACE(KERNEL, "Busdev socket opening stubbed with number 0");
+            return epoc::error_none;
+        }
+
         if (!ldd_name) {
             return epoc::error_argument;
         }
 
-        kernel::process *own_pr = kern->crr_process();
         const std::u16string ldd_name_str = ldd_name->to_std_string(own_pr);
 
-        if (pdd_name) {
-            LOG_TRACE(KERNEL, "Ldd name: {}, Pdd name: {}", common::ucs2_to_utf8(ldd_name_str),
-                common::ucs2_to_utf8(pdd_name->to_std_string(own_pr)));
-        }
-
-        // The EKA1 way of opening a logical device: the name arrives as the
-        // driver's, sometimes with its extension, and what comes back is a
-        // handle to a channel on it. This used to answer "fine" and hand back
-        // nothing, so every call the caller then made on the channel found no
-        // channel - which for a game that drives the screen through a driver
-        // means it simply stops.
+        // Symbian OS 6.x (the N-Gage platform chimera-core-eka2l1 wrote this for) opens the logical
+        // device here: the name arrives as the driver's, sometimes with its extension, and what comes
+        // back is a handle to a channel on it. This used to answer "fine" and hand back nothing, so
+        // every call the caller then made on the channel found no channel - which for a game that
+        // drives the screen through a driver means it simply stops.
         const std::string name = common::lowercase_string(eka2l1::replace_extension(
             eka2l1::filename(common::ucs2_to_utf8(ldd_name_str)), ""));
 
