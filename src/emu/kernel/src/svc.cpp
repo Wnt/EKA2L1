@@ -32,6 +32,7 @@
 #include <common/configure.h>
 #include <kernel/kernel.h>
 #include <kernel/svc.h>
+#include <cstdlib>
 
 #include <loader/rom.h>
 
@@ -3714,6 +3715,28 @@ namespace eka2l1::epoc {
 
         if (name_of_mut_des) {
             name_of_mut = common::ucs2_to_utf8(name_of_mut_des->to_std_string(target_process));
+        }
+
+        // Named kernel objects live in one global namespace (sema_create_eka1 already enforces it): a second
+        // RMutex::CreateGlobal of a taken name fails with KErrAlreadyExists, and the caller falls back to
+        // OpenGlobal and synchronises on the SAME mutex. Series 80's skin client serialises its server start
+        // on "SkinServerMutex" this way; with a duplicate per client, every application launched at the same
+        // time started its own skin server. EKA2L1_FIX_MUTEX_DUPNAME=0 restores the old behaviour.
+        if (access_of_mut == kernel::access_type::global_access) {
+            static const bool refuse_duplicate = []() {
+                const char *v = std::getenv("EKA2L1_FIX_MUTEX_DUPNAME");
+                return !v || (v[0] != '0');
+            }();
+
+            if (kern->get_by_name_and_type<kernel::legacy::mutex>(name_of_mut, kernel::object_type::mutex)) {
+                LOG_TRACE(KERNEL, "Global mutex {} already exists ({} creating it){}", name_of_mut, target_thread->name(),
+                    refuse_duplicate ? "" : ", duplicate created");
+
+                if (refuse_duplicate) {
+                    finish_status_request_eka1(target_thread, finish_signal, epoc::error_already_exists);
+                    return epoc::error_already_exists;
+                }
+            }
         }
 
         const kernel::handle h = kern->create_and_add<kernel::legacy::mutex>(get_handle_owner_from_eka1_attribute(attribute),
