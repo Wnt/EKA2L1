@@ -83,6 +83,7 @@
 
 #include <services/init.h>
 #include <system/epoc.h>
+#include <vfs/vfs.h>
 #include <utils/locale.h>
 #include <utils/system.h>
 
@@ -516,10 +517,16 @@ namespace eka2l1 {
             }
 
             std::string list;
+            bool optional_entries = false;
             if (const char *env = std::getenv("EKA2L1_PRESTART")) {
                 list = env;
             } else if (std::getenv("EKA2L1_ROM_EIKSRV") && kern->is_eka1() && sys->is_s80_device_active()) {
-                list = "Z:\\System\\Programs\\SecurityServer.exe";
+                // SysState.exe (tools/s80-sysstate, ours) publishes the SharedData system state Starter
+                // would have left (state.val=203 ...); without it the Eikon server's alarm alert server
+                // refuses the ROM AlarmServer, which is then restarted twice a second. Optional: it is
+                // started only when the data dir carries it.
+                list = "C:\\System\\Programs\\SysState.exe;Z:\\System\\Programs\\SecurityServer.exe";
+                optional_entries = true;
             }
 
             std::size_t start = 0;
@@ -533,6 +540,11 @@ namespace eka2l1 {
                 start = end + 1;
 
                 if (path.empty()) {
+                    continue;
+                }
+
+                if (optional_entries && (path[0] == 'C') && !sys->get_io_system()->exist(common::utf8_to_ucs2(path))) {
+                    LOG_INFO(KERNEL, "Prestart: {} not present, skipped", path);
                     continue;
                 }
 
