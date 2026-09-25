@@ -392,6 +392,12 @@ namespace eka2l1::epoc {
             source_bitmap_drv = bcache_.add_or_get(driver_, source_bitmap_bw, &builder_);
         }
 
+        if (!source_bitmap_drv) {
+            // The cache refused the bitmap (its pixels are not readable); drawing texture 0 would take
+            // the renderer down.
+            return;
+        }
+
         drivers::handle mask_bitmap_drv = cmd.mask_drv_;
 
         if (!mask_bitmap_drv && mask_bitmap_bw) {
