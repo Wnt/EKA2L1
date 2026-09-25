@@ -331,7 +331,11 @@ namespace eka2l1 {
                 // Create the subsession
                 new_sub = std::make_unique<etel_line_subsession>(this, *line_ite, server<etel_server>()->legacy_level());
             } else {
-                LOG_ERROR(SERVICE_ETEL, "Unable to open subsession with object name {}", common::ucs2_to_utf8(name_of_object.value()));
+                // Not a line: a TSY extension object (Nokia's CUSTOMAPI and friends). Open it as
+                // a stub; the Series 80 system servers cannot construct without one.
+                const std::string ext_name = common::ucs2_to_utf8(name_of_object.value());
+                LOG_INFO(SERVICE_ETEL, "Opening TSY extension object {} from phone as a stub", ext_name);
+                new_sub = std::make_unique<etel_custom_subsession>(this, ext_name, server<etel_server>()->legacy_level());
             }
         } else {
             LOG_ERROR(SERVICE_ETEL, "Unhandled subsession type to open from {}", static_cast<int>(sub->type()));
@@ -432,9 +436,9 @@ namespace eka2l1 {
                 is_supported_by_module(ctx);
                 break;
 
-            // RTelServer::SetPriorityClient and SetExtendedErrorGranularity only record a preference. The
-            // 7.0s Series 80 servers (SecurityServer, CbsServer, SatServer) send them right after
-            // LoadPhoneModule, and the Contacts app blocked on 14 before its first redraw.
+            // RTelServer::SetPriorityClient / SetExtendedErrorGranularity only record a preference.
+            // The 7.0s Series 80 servers (SecurityServer, CbsServer, SatServer) call 14 right after
+            // LoadPhoneModule and Contacts blocks on it before its first redraw; they just need the answer.
             case epoc::etel_old_set_priority_client:
             case epoc::etel_old_set_extend_error_granularity:
                 ctx->complete(epoc::error_none);
@@ -513,5 +517,15 @@ namespace eka2l1 {
                 break;
             }
         }
+    }
+
+    etel_custom_subsession::etel_custom_subsession(etel_session *session, const std::string &name, const etel_legacy_level lvl)
+        : etel_subsession(session, lvl) {
+        name_ = name;
+    }
+
+    void etel_custom_subsession::dispatch(service::ipc_context *ctx) {
+        LOG_TRACE(SERVICE_ETEL, "TSY extension {} request {} answered as not supported", name_, ctx->msg->function);
+        ctx->complete(epoc::error_not_supported);
     }
 }

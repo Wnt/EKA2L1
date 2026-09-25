@@ -42,6 +42,7 @@
 #include <disasm/disasm.h>
 
 #include <kernel/kernel.h>
+#include <utils/reqsts.h>
 #include <kernel/libmanager.h>
 #include <kernel/guomen_process.h>
 #include <kernel/scheduler.h>
@@ -1196,7 +1197,16 @@ namespace eka2l1 {
         for (int handle = 1; handle <= 0x1000; handle++) {
             ipc_msg *msg = kern->get_msg(handle);
             if (!msg || msg->is_free() || (msg->type == ipc_message_type_wild)
-                || (msg->msg_status == ipc_message_status::completed)) {
+                || (msg->msg_status == ipc_message_status::completed) || (msg->msg_status == ipc_message_status::none)
+                || !msg->own_thr || !msg->request_sts || (msg->own_thr->current_state() == kernel::thread_state::stop)) {
+                continue;
+            }
+
+            // HLE servers complete through ipc_context, which leaves msg_status alone; the client's
+            // TRequestStatus is the truth: only a request still at KRequestPending is outstanding.
+            kernel::process *client = msg->own_thr->owning_process();
+            epoc::request_status *sts = client ? msg->request_sts.get(client) : nullptr;
+            if (!sts || (sts->status != epoc::request_status::pending_status)) {
                 continue;
             }
 
