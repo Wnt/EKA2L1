@@ -608,7 +608,7 @@ namespace eka2l1 {
 
     void applist_server::init() {
         fbsserv = reinterpret_cast<fbs_server *>(kern->get_by_name<service::server>(
-            epoc::get_fbs_server_name_by_epocver(kern->get_epoc_version())));
+            epoc::get_host_fbs_server_name_by_epocver(kern->get_epoc_version())));
 
         fsserv = kern->get_by_name<eka2l1::fs_server>(epoc::fs::get_server_name_through_epocver(
             kern->get_epoc_version()));
@@ -879,6 +879,13 @@ namespace eka2l1 {
     // file-name dialog walks the app list for its document-type icons, left with that error: the "System /
     // Unknown error" note instead of the dialog.
     void applist_server::get_app_icon_by_uid(service::ipc_context &ctx) {
+        // Host icon handles belong to EKA2L1HostFbs, not the guest's ROM FBS.
+        // Optional until an ARM RFbsSession bridge can publish these bitmaps.
+        if (epoc::rom_fbs_enabled(kern->get_epoc_version())) {
+            ctx.complete(epoc::error_not_found);
+            return;
+        }
+
         std::optional<epoc::uid> app_uid = ctx.get_argument_value<epoc::uid>(0);
         std::optional<std::int32_t> request = ctx.get_argument_value<std::int32_t>(1);
 
@@ -907,6 +914,13 @@ namespace eka2l1 {
     }
 
     void applist_server::get_app_icon(service::ipc_context &ctx) {
+        // Host icon handles belong to EKA2L1HostFbs, not the guest's ROM FBS.
+        // Optional until an ARM RFbsSession bridge can publish these bitmaps.
+        if (epoc::rom_fbs_enabled(kern->get_epoc_version())) {
+            ctx.complete(epoc::error_not_found);
+            return;
+        }
+
         std::optional<epoc::uid> app_uid = ctx.get_argument_value<epoc::uid>(0);
         std::optional<std::int32_t> icon_size_width = std::nullopt;
         std::optional<std::int32_t> icon_size_height = std::nullopt;
@@ -964,6 +978,13 @@ namespace eka2l1 {
     }
 
     void applist_server::get_app_icon_sizes(service::ipc_context &ctx) {
+        // Host icon handles belong to EKA2L1HostFbs, not the guest's ROM FBS.
+        // Optional until an ARM RFbsSession bridge can publish these bitmaps.
+        if (epoc::rom_fbs_enabled(kern->get_epoc_version())) {
+            ctx.complete(epoc::error_not_found);
+            return;
+        }
+
         std::optional<epoc::uid> app_uid = ctx.get_argument_value<epoc::uid>(0);
 
         if (!app_uid) {

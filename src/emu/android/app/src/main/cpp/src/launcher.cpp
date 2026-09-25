@@ -70,7 +70,7 @@ namespace eka2l1::android {
                     kern->get_epoc_version())));
             winserv = reinterpret_cast<eka2l1::window_server *>(kern->get_by_name<service::server>(get_winserv_name_by_epocver(
                     kern->get_epoc_version())));
-            fbsserv = reinterpret_cast<eka2l1::fbs_server *>(kern->get_by_name<service::server>(epoc::get_fbs_server_name_by_epocver(
+            fbsserv = reinterpret_cast<eka2l1::fbs_server *>(kern->get_by_name<service::server>(epoc::get_host_fbs_server_name_by_epocver(
                     kern->get_epoc_version())));
             rightsserv = reinterpret_cast<eka2l1::rights_server *>(kern->get_by_name<service::server>(eka2l1::RIGHTS_SERVER_NAME));
         }

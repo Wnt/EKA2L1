@@ -610,7 +610,7 @@ void main_window::setup_app_list(const bool load_now) {
     eka2l1::kernel_system *kernel = system->get_kernel_system();
     if (kernel) {
         const std::string al_server_name = eka2l1::get_app_list_server_name_by_epocver(kernel->get_epoc_version());
-        const std::string fbs_server_name = eka2l1::epoc::get_fbs_server_name_by_epocver(kernel->get_epoc_version());
+        const std::string fbs_server_name = eka2l1::epoc::get_host_fbs_server_name_by_epocver(kernel->get_epoc_version());
 
         eka2l1::applist_server *al_serv = reinterpret_cast<eka2l1::applist_server *>(kernel->get_by_name<eka2l1::service::server>(al_server_name));
         eka2l1::fbs_server *fbs_serv = reinterpret_cast<eka2l1::fbs_server *>(kernel->get_by_name<eka2l1::service::server>(fbs_server_name));

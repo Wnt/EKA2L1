@@ -307,7 +307,7 @@ namespace eka2l1::epoc {
         this->driver = driver;
 
         if (!fbss_) {
-            server_ptr ss = kern->get_by_name<service::server>(epoc::get_fbs_server_name_by_epocver(
+            server_ptr ss = kern->get_by_name<service::server>(epoc::get_host_fbs_server_name_by_epocver(
                 kern->get_epoc_version()));
 
             fbss_ = reinterpret_cast<fbs_server *>(ss);

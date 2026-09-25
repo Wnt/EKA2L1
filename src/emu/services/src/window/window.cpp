@@ -2325,6 +2325,9 @@ namespace eka2l1 {
     }
 
     void window_server::s80_set_status_pane_layout(kernel::process *pr, const std::uint32_t layout_res) {
+        if (epoc::rom_fbs_enabled(sys->get_symbian_version_use())) {
+            return; // The ROM Eikon server paints its pane through ARM wserv/FBS.
+        }
         if (!s80_status_pane_) {
             s80_status_pane_ = std::make_unique<epoc::s80_status_pane>(this);
         }
@@ -3436,7 +3439,7 @@ namespace eka2l1 {
     fbs_server *window_server::get_fbs_server() {
         if (!fbss) {
             fbss = reinterpret_cast<fbs_server *>(&(*sys->get_kernel_system()->get_by_name<service::server>(
-                epoc::get_fbs_server_name_by_epocver(sys->get_symbian_version_use()))));
+                epoc::get_host_fbs_server_name_by_epocver(sys->get_symbian_version_use()))));
         }
 
         return fbss;

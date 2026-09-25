@@ -611,7 +611,7 @@ namespace eka2l1::ios {
         }
         return reinterpret_cast<eka2l1::fbs_server *>(
             kern->get_by_name<eka2l1::service::server>(
-                eka2l1::epoc::get_fbs_server_name_by_epocver(kern->get_epoc_version())));
+                eka2l1::epoc::get_host_fbs_server_name_by_epocver(kern->get_epoc_version())));
     }
 
     // The component bundle handed to each new eka2l1::system. iOS never feeds a

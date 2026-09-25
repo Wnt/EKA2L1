@@ -340,6 +340,11 @@ namespace eka2l1 {
         }
 
         case camera_get_image: {
+            if (epoc::rom_fbs_enabled(ctx->sys->get_symbian_version_use())) {
+                // Camera HLE cannot exchange its private bitmap IDs with ROM FBS.
+                ctx->complete(epoc::error_not_supported);
+                break;
+            }
             if (!camera_) {
                 ctx->complete(epoc::error_not_ready);
                 break;
@@ -353,7 +358,7 @@ namespace eka2l1 {
 
             kernel_system *kern = ctx->sys->get_kernel_system();
             fbs_server *fbs = reinterpret_cast<fbs_server *>(kern->get_by_name<service::server>(
-                epoc::get_fbs_server_name_by_epocver(kern->get_epoc_version())));
+                epoc::get_host_fbs_server_name_by_epocver(kern->get_epoc_version())));
             if (!fbs) {
                 ctx->complete(epoc::error_not_ready);
                 break;
