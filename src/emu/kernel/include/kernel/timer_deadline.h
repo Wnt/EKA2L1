@@ -24,6 +24,27 @@
 #include <limits>
 
 namespace eka2l1::kernel {
+    struct timer_lock_deadline {
+        std::uint64_t tick;
+        bool synchronized;
+    };
+
+    // TTickLink::GetNextLock: twelve clock marks rounded to the 64 Hz RTC
+    // grid. A new lock, or one missed by more than a second, first synchronizes
+    // at twelve o'clock and completes with KErrGeneral.
+    constexpr timer_lock_deadline next_timer_lock(std::uint64_t now_tick,
+        std::int64_t last_tick, std::uint32_t phase) {
+        const std::uint64_t second = now_tick / 64 * 64;
+        std::uint64_t next = second + ((phase + 1) * 64 + 6) / 12;
+        if (next <= now_tick) {
+            next += 64;
+        }
+        if (last_tick < 0 || next > static_cast<std::uint64_t>(last_tick) + 64) {
+            return { second + 64, false };
+        }
+        return { next, true };
+    }
+
     // Model the nominal 64 Hz queue; hardware also has nanokernel rounding jitter.
     constexpr std::uint64_t tick_timer_deadline(std::uint64_t now, std::uint64_t interval_us) {
         constexpr std::uint64_t period = 1000000 / epoc::TICK_TIMER_HZ;

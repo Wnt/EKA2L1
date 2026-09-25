@@ -3056,6 +3056,14 @@ namespace eka2l1::epoc {
 
         timer->after_tick_queue(kern->crr_thread(), req_sts, us_after);
     }
+
+    BRIDGE_FUNC(void, timer_lock_eka1, eka2l1::ptr<epoc::request_status> status,
+        std::uint32_t phase, kernel::handle handle) {
+        auto *timer = kern->get<kernel::timer>(handle);
+        if (!timer || !timer->lock(kern->crr_thread(), status, phase)) {
+            kern->crr_thread()->kill(kernel::entity_exit_type::panic, u"KERN-EXEC", timer ? 15 : 0);
+        }
+    }
     
     BRIDGE_FUNC(void, timer_after_ticks_eka1, eka2l1::ptr<epoc::request_status> req_sts, std::int32_t ticks_after, kernel::handle h) {
         timer_ptr timer = kern->get<kernel::timer>(h);
@@ -3743,6 +3751,28 @@ namespace eka2l1::epoc {
         }
 
         name_des->assign(crr_pr, common::utf8_to_ucs2(obj->name()));
+    }
+
+    BRIDGE_FUNC(void, handle_full_name_eka1, des16 *name_des, kernel::handle h) {
+        auto *obj = kern->get_kernel_obj_raw(h, kern->crr_thread());
+        if (obj && name_des) {
+            std::string name;
+            obj->full_name(name);
+            name_des->assign(kern->crr_process(), common::utf8_to_ucs2(name));
+        }
+    }
+
+    BRIDGE_FUNC(void, ws_register_thread_eka1, address entry) {
+        kern->register_window_server(kern->crr_thread(), entry);
+    }
+
+    BRIDGE_FUNC(void, ws_register_screen_on_eka1, std::uint32_t handles) {
+        kern->register_window_server_screen_on(kern->crr_thread(), handles != 0);
+    }
+
+    BRIDGE_FUNC(void, ws_switch_on_screen_eka1) {
+        // The host panel is permanently powered. There is no sleeping display
+        // or asynchronous power transition to acknowledge on this backend.
     }
 
     BRIDGE_FUNC(std::int32_t, library_lookup_eka1, const std::uint32_t ord_index, kernel::handle h) {
@@ -5176,11 +5206,21 @@ namespace eka2l1::epoc {
         const epocver kver = kern->get_epoc_version();
 
         if (kver == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV") && (attribute & 0xFF) == 0x52) {
-            // UserSvr::ChangeLocale(RLibrary), decoded from RAE-6 EUser ordinal 159.
-            // Bootstrap stub: the HLE kernel already supplies its locale and language
-            // tables. Complete the executor's status as well as its synchronous result.
-            LOG_INFO(KERNEL, "ROM wserv: ChangeLocale bootstrap stub keeps the HLE locale");
-            finish_status_request_eka1(crr_thread, finish_signal, epoc::error_none);
+            // EKA1's kernel owns the locale tables. This backend currently
+            // implements the core English locale only (day/month/currency and
+            // character tables below). Accept that implementation, reject other
+            // DLLs explicitly, and preserve TLocale settings loaded from C:.
+            // The executor return is transport success; the operation result
+            // belongs in its request status, including for a bad library handle.
+            auto *lib = kern->get<kernel::library>(create_info->arg0_);
+            std::int32_t result = epoc::error_bad_handle;
+            if (lib) {
+                auto *seg = lib->get_codeseg();
+                result = std::get<2>(seg->get_uids()) == 0x100065A5
+                    && common::compare_ignore_case(eka2l1::filename(seg->get_full_path()), std::u16string(u"elocl.dll")) == 0
+                    ? epoc::error_none : epoc::error_not_supported;
+            }
+            finish_status_request_eka1(crr_thread, finish_signal, result);
             return epoc::error_none;
         }
 
@@ -6989,6 +7029,7 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0x800058, des8_locate_fold),
         BRIDGE_REGISTER(0x800059, des16_locate_fold),
         BRIDGE_REGISTER(0x80005A, handle_name_eka1),
+        BRIDGE_REGISTER(0x80005B, handle_full_name_eka1),
         BRIDGE_REGISTER(0x80005C, handle_info_eka1),
         BRIDGE_REGISTER(0x800060, user_language),
         BRIDGE_REGISTER(0x800061, day_name_eka1),
@@ -7010,6 +7051,9 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0x8000A9, library_type_eka1),
         BRIDGE_REGISTER(0x8000AA, process_type_eka1),
         BRIDGE_REGISTER(0x8000AB, get_locale_char_set),
+        BRIDGE_REGISTER(0x8000AC, ws_switch_on_screen_eka1),
+        BRIDGE_REGISTER(0xC00087, ws_register_thread_eka1),
+        BRIDGE_REGISTER(0xC000AD, ws_register_screen_on_eka1),
         BRIDGE_REGISTER(0x8000AF, process_set_type_eka1),
         BRIDGE_REGISTER(0x8000B7, bus_dev_open_socket),
         BRIDGE_REGISTER(0x8000BB, user_svr_dll_filename),
@@ -7026,6 +7070,7 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0x8000E6, message_ipc_copy_eka1),
         BRIDGE_REGISTER(0x8000EA, message_queue_notify_space_available),
         BRIDGE_REGISTER(0x8000EB, message_queue_notify_data_available),
+        BRIDGE_REGISTER(0xC0000C, logical_channel_do_request_eka1),
         BRIDGE_REGISTER(0xC0000E, logical_channel_do_control_eka1),
         BRIDGE_REGISTER(0xC0001D, process_resume),
         BRIDGE_REGISTER(0xC00024, process_set_priority_eka1),
@@ -7044,6 +7089,7 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0xC00047, timer_cancel),
         BRIDGE_REGISTER(0xC00048, timer_after_eka1),
         BRIDGE_REGISTER(0xC00049, timer_at_eka1),
+        BRIDGE_REGISTER(0xC0004A, timer_lock_eka1),
         BRIDGE_REGISTER(0xC0004E, request_signal),
         BRIDGE_REGISTER(0xC0005E, after),
         BRIDGE_REGISTER(0xC00069, locale_set_eka1),
@@ -7124,6 +7170,7 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0x800058, des8_locate_fold),
         BRIDGE_REGISTER(0x800059, des16_locate_fold),
         BRIDGE_REGISTER(0x80005A, handle_name_eka1),
+        BRIDGE_REGISTER(0x80005B, handle_full_name_eka1),
         BRIDGE_REGISTER(0x80005C, handle_info_eka1),
         BRIDGE_REGISTER(0x800060, user_language),
         BRIDGE_REGISTER(0x800068, locale_refresh),
@@ -7138,6 +7185,9 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0x8000A9, library_type_eka1),
         BRIDGE_REGISTER(0x8000AA, process_type_eka1),
         BRIDGE_REGISTER(0x8000AB, get_locale_char_set),
+        BRIDGE_REGISTER(0x8000AC, ws_switch_on_screen_eka1),
+        BRIDGE_REGISTER(0xC00087, ws_register_thread_eka1),
+        BRIDGE_REGISTER(0xC000AD, ws_register_screen_on_eka1),
         BRIDGE_REGISTER(0x8000AF, process_set_type_eka1),
         BRIDGE_REGISTER(0x8000B7, bus_dev_open_socket),
         BRIDGE_REGISTER(0x8000BB, user_svr_dll_filename),
@@ -7172,6 +7222,7 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0xC00047, timer_cancel),
         BRIDGE_REGISTER(0xC00048, timer_after_eka1),
         BRIDGE_REGISTER(0xC00049, timer_at_eka1),
+        BRIDGE_REGISTER(0xC0004A, timer_lock_eka1),
         BRIDGE_REGISTER(0xC0004E, request_signal),
         BRIDGE_REGISTER(0xC0005E, after),
         BRIDGE_REGISTER(0xC0006B, message_complete_eka1),
@@ -7251,6 +7302,7 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0x800058, des8_locate_fold),
         BRIDGE_REGISTER(0x800059, des16_locate_fold),
         BRIDGE_REGISTER(0x80005A, handle_name_eka1),
+        BRIDGE_REGISTER(0x80005B, handle_full_name_eka1),
         BRIDGE_REGISTER(0x80005C, handle_info_eka1),
         BRIDGE_REGISTER(0x800060, user_language),
         BRIDGE_REGISTER(0x800068, locale_refresh),
@@ -7266,6 +7318,9 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0x8000A9, library_type_eka1),
         BRIDGE_REGISTER(0x8000AA, process_type_eka1),
         BRIDGE_REGISTER(0x8000AB, get_locale_char_set),
+        BRIDGE_REGISTER(0x8000AC, ws_switch_on_screen_eka1),
+        BRIDGE_REGISTER(0xC00087, ws_register_thread_eka1),
+        BRIDGE_REGISTER(0xC000AD, ws_register_screen_on_eka1),
         BRIDGE_REGISTER(0x8000AF, process_set_type_eka1),
         BRIDGE_REGISTER(0x8000B7, bus_dev_open_socket),
         BRIDGE_REGISTER(0x8000BB, user_svr_dll_filename),
@@ -7291,6 +7346,7 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0xC00047, timer_cancel),
         BRIDGE_REGISTER(0xC00048, timer_after_eka1),
         BRIDGE_REGISTER(0xC00049, timer_at_eka1),
+        BRIDGE_REGISTER(0xC0004A, timer_lock_eka1),
         BRIDGE_REGISTER(0xC0004E, request_signal),
         BRIDGE_REGISTER(0xC0005E, after),
         BRIDGE_REGISTER(0xC0006B, message_complete_eka1),

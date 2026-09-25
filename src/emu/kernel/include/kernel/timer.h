@@ -47,6 +47,10 @@ namespace eka2l1 {
             signal_info info;
             bool outstanding;
             int activate_defer_count_ = 0;
+            std::int64_t last_lock_tick_ = -1;
+            bool lock_request_ = false;
+            int completion_code_ = 0;
+            std::size_t thread_kill_callback_;
 
             // Whether the outstanding request may be completed now. Reschedules the
             // event and answers false while the guest has issued the request but not
@@ -72,6 +76,9 @@ namespace eka2l1 {
 
             bool after_ticks(kernel::thread *requester, eka2l1::ptr<epoc::request_status> sts,
                 std::uint32_t tick_count);
+
+            bool lock(kernel::thread *requester, eka2l1::ptr<epoc::request_status> sts,
+                std::uint32_t phase);
 
             bool request_finish();
             bool cancel_request();

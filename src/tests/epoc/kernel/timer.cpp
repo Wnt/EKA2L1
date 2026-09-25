@@ -85,3 +85,22 @@ TEST_CASE("absolute timer deadlines survive queue insertion", "[timer]") {
     REQUIRE_FALSE(timing.advance().has_value());
     REQUIRE(completed == 42);
 }
+
+TEST_CASE("locked timers synchronize and retain the requested clock phase", "[timer]") {
+    auto first = next_timer_lock(100 * 64 + 19, -1, 0);
+    REQUIRE_FALSE(first.synchronized);
+    REQUIRE(first.tick == 101 * 64);
+    auto one = next_timer_lock(first.tick, first.tick, 0);
+    REQUIRE(one.synchronized);
+    REQUIRE(one.tick == 101 * 64 + 5);
+    auto same = next_timer_lock(one.tick, one.tick, 0);
+    REQUIRE(same.synchronized);
+    REQUIRE(same.tick == one.tick + 64);
+    auto missed = next_timer_lock(one.tick + 64, one.tick, 0);
+    REQUIRE_FALSE(missed.synchronized);
+    REQUIRE(missed.tick == 103 * 64);
+    REQUIRE(next_timer_lock(6400, 6400, 5).tick == 6432);
+    REQUIRE(next_timer_lock(6400, 6400, 11).tick == 6464);
+    REQUIRE(next_timer_lock(6431, 6400, 5).tick == 6432);
+    REQUIRE(next_timer_lock(6432, 6432, 5).tick == 6496);
+}

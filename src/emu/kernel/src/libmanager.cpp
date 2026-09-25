@@ -1229,20 +1229,6 @@ namespace eka2l1::hle {
             return true;
         }
 
-        if (kern_->get_epoc_version() == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV")
-            && svcnum == 0xC0004A) {
-            // RTimer::Lock bootstrap; raw input now uses the executive event hook.
-            // Display-clock completion is implemented on the ROM boot track.
-            const address status_addr = kern_->get_cpu()->get_reg(0);
-            auto *status = eka2l1::ptr<epoc::request_status>(status_addr).get(kern_->crr_process());
-            if (status) {
-                status->set(epoc::status_pending, true);
-            }
-            LOG_INFO(KERNEL, "ROM wserv: parked bootstrap SVC 0x{:X} status 0x{:X}", svcnum, status_addr);
-            kern_->unlock();
-            return true;
-        }
-
         auto res = svc_funcs_.find(svcnum);
 
         if (res == svc_funcs_.end()) {
