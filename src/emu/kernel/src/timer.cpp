@@ -52,6 +52,16 @@ namespace eka2l1 {
             , outstanding(false) {
             obj_type = object_type::timer;
 
+            thread_kill_callback_ = kern->register_thread_kill_callback(
+                [this](kernel::thread *target, const std::string &, std::int32_t) {
+                    if (outstanding && info.done_nof.requester == target) {
+                        this->timing->unschedule_event(callback_type, static_cast<std::uint64_t>(unique_id()));
+                        outstanding = false;
+                        info.done_nof = epoc::notify_info();
+                        last_lock_tick_ = -1;
+                    }
+                });
+
             callback_type = timing->get_register_event("TimerCallback");
 
             if (callback_type == -1) {
@@ -70,6 +80,7 @@ namespace eka2l1 {
         }
 
         timer::~timer() {
+            kern->unregister_thread_kill_callback(thread_kill_callback_);
             timing->unschedule_event(callback_type, static_cast<std::uint64_t>(unique_id()));
         }
 
@@ -80,6 +91,8 @@ namespace eka2l1 {
             }
 
             outstanding = true;
+            lock_request_ = false;
+            completion_code_ = epoc::error_none;
             activate_defer_count_ = 0;
             info.done_nof = epoc::notify_info(sts, requester);
             info.own_timer = this;
@@ -88,6 +101,9 @@ namespace eka2l1 {
         }
 
         bool timer::after(kernel::thread *requester, eka2l1::ptr<epoc::request_status> sts, std::uint64_t us_signal) {
+            if (!outstanding) {
+                last_lock_tick_ = -1;
+            }
             static constexpr std::uint64_t MINIMUM_US_AFTER = 30;
             return schedule_at(requester, sts,
                 timing->microseconds() + common::max<std::uint64_t>(MINIMUM_US_AFTER, us_signal));
@@ -95,16 +111,25 @@ namespace eka2l1 {
 
         bool timer::after_tick_queue(kernel::thread *requester, eka2l1::ptr<epoc::request_status> sts,
             std::int32_t interval) {
+            if (!outstanding) {
+                last_lock_tick_ = -1;
+            }
             return schedule_at(requester, sts, timer_after_deadline(timing->microseconds(), interval));
         }
 
         bool timer::after_high_res(kernel::thread *requester, eka2l1::ptr<epoc::request_status> sts,
             std::uint32_t us_signal) {
+            if (!outstanding) {
+                last_lock_tick_ = -1;
+            }
             return schedule_at(requester, sts, high_res_timer_deadline(timing->microseconds(), us_signal));
         }
 
         bool timer::after_ticks(kernel::thread *requester, eka2l1::ptr<epoc::request_status> sts,
             std::uint32_t tick_count) {
+            if (!outstanding) {
+                last_lock_tick_ = -1;
+            }
             return schedule_at(requester, sts, tick_count_timer_deadline(timing->microseconds(), tick_count));
         }
 
@@ -114,6 +139,23 @@ namespace eka2l1 {
             }
 
             outstanding = false;
+            return true;
+        }
+
+        bool timer::lock(kernel::thread *requester, eka2l1::ptr<epoc::request_status> sts,
+            std::uint32_t phase) {
+            if (outstanding || phase > 11) {
+                return false;
+            }
+            constexpr std::uint64_t tick_us = 1000000 / 64;
+            const std::uint64_t utc = kern->universal_time();
+            const auto next = next_timer_lock(utc / tick_us, last_lock_tick_, phase);
+            if (!schedule_at(requester, sts, timing->microseconds() + next.tick * tick_us - utc)) {
+                return false;
+            }
+            info.done_nof.pending();
+            lock_request_ = true;
+            completion_code_ = next.synchronized ? epoc::error_none : epoc::error_general;
             return true;
         }
 
@@ -173,7 +215,10 @@ namespace eka2l1 {
                 return;
             }
 
-            info.done_nof.complete(epoc::error_none);
+            if (lock_request_) {
+                last_lock_tick_ = kern->universal_time() / (1000000 / 64);
+            }
+            info.done_nof.complete(completion_code_);
         }
 
         void timer_callback(kernel_system *kern, uint64_t user, int ns_late) {
