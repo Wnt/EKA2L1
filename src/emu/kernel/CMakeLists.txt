@@ -65,6 +65,7 @@ add_library(epockern
         src/sema.cpp
         src/thread.cpp
         src/timer.cpp
+        src/raw_event.cpp
         src/kernel.cpp
         src/property.cpp
         src/reg.cpp

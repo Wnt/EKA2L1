@@ -117,6 +117,7 @@ namespace eka2l1 {
 
     void kernel_system::wipeout() {
         wiping_ = true;
+        raw_events_.reset();
         timing_->remove_event(realtime_ipc_signal_evt_);
         stop_ipc_watch(timing_);
 

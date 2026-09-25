@@ -3611,13 +3611,33 @@ namespace eka2l1::epoc {
         return eka2l1::random();
     }
 
-    BRIDGE_FUNC(void, add_event, epoc::raw_event *evt) {
+    BRIDGE_FUNC(void, capture_event_hook) {
+        if (kern->rom_raw_input_enabled()) kern->capture_raw_event_hook();
+    }
+
+    BRIDGE_FUNC(void, release_event_hook) {
+        if (kern->rom_raw_input_enabled()) kern->release_raw_event_hook();
+    }
+
+    BRIDGE_FUNC(void, request_event, address buffer, address status) {
+        if (kern->rom_raw_input_enabled()) kern->request_raw_event(buffer, status);
+    }
+
+    BRIDGE_FUNC(void, request_event_cancel) {
+        if (kern->rom_raw_input_enabled()) kern->cancel_raw_event();
+    }
+
+    BRIDGE_FUNC(std::int32_t, add_event, epoc::raw_event *evt) {
+        if (evt && kern->rom_raw_input_enabled()) {
+            return kern->add_raw_event(*reinterpret_cast<epoc::raw_event_eka1 *>(evt));
+        }
         if (!evt) {
             LOG_ERROR(KERNEL, "Event to add is null, ignored");
-            return;
+            return epoc::error_argument;
         }
 
         dispatcher_do_event_add(kern->get_system(), *evt);
+        return epoc::error_none;
     }
 
     /* ================ EKA1 ROUTES ================== */
@@ -7030,6 +7050,10 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0xC0006B, message_complete_eka1),
         BRIDGE_REGISTER(0xC0006D, heap_switch),
         BRIDGE_REGISTER(0xC00076, the_executor_eka1),
+        BRIDGE_REGISTER(0xC00077, capture_event_hook),
+        BRIDGE_REGISTER(0xC00078, release_event_hook),
+        BRIDGE_REGISTER(0xC00079, request_event),
+        BRIDGE_REGISTER(0xC0007A, request_event_cancel),
         BRIDGE_REGISTER(0xC0007B, add_event),
         BRIDGE_REGISTER(0xC00097, debug_command_execute),
         BRIDGE_REGISTER(0xC0009F, set_exception_handler_eka1),
@@ -7153,6 +7177,10 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0xC0006B, message_complete_eka1),
         BRIDGE_REGISTER(0xC0006D, heap_switch),
         BRIDGE_REGISTER(0xC00076, the_executor_eka1),
+        BRIDGE_REGISTER(0xC00077, capture_event_hook),
+        BRIDGE_REGISTER(0xC00078, release_event_hook),
+        BRIDGE_REGISTER(0xC00079, request_event),
+        BRIDGE_REGISTER(0xC0007A, request_event_cancel),
         BRIDGE_REGISTER(0xC0007B, add_event),
         BRIDGE_REGISTER(0xC00097, debug_command_execute),
         BRIDGE_REGISTER(0xC0009F, set_exception_handler_eka1),
@@ -7268,6 +7296,10 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0xC0006B, message_complete_eka1),
         BRIDGE_REGISTER(0xC0006D, heap_switch),
         BRIDGE_REGISTER(0xC00076, the_executor_eka1),
+        BRIDGE_REGISTER(0xC00077, capture_event_hook),
+        BRIDGE_REGISTER(0xC00078, release_event_hook),
+        BRIDGE_REGISTER(0xC00079, request_event),
+        BRIDGE_REGISTER(0xC0007A, request_event_cancel),
         BRIDGE_REGISTER(0xC0007B, add_event),
         BRIDGE_REGISTER(0xC00097, debug_command_execute),
         BRIDGE_REGISTER(0xC0009F, set_exception_handler_eka1),

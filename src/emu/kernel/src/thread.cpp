@@ -382,6 +382,7 @@ namespace eka2l1 {
         }
 
         int thread::destroy() {
+            kern->detach_raw_event_owner(this);
             // Unlink from proces's thread list
             process_thread_link.deque();
 
@@ -586,6 +587,7 @@ namespace eka2l1 {
             finish_logons();
 
             kern->complete_undertakers(this);
+            kern->detach_raw_event_owner(this);
             kern->call_thread_kill_callbacks(this, exit_category_u8, reason);
 
             kernel::process *mama = owning_process();
