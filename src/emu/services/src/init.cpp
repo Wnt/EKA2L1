@@ -85,6 +85,7 @@
 #include <services/uiss/uiss.h>
 #include <services/unipertar/unipertar.h>
 #include <services/window/window.h>
+#include <services/window/rom_bridge.h>
 #include <services/host_launch.h>
 
 #include <services/init.h>
@@ -537,6 +538,9 @@ namespace eka2l1 {
 
             CREATE_SERVER(sys, fbs_server);
             CREATE_SERVER(sys, window_server);
+            if (sys->get_symbian_version_use() == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV")) {
+                CREATE_SERVER(sys, rom_window_bridge);
+            }
             CREATE_SERVER(sys, central_repo_server, provide_host_access_point);
             CREATE_SERVER(sys, featmgr_server);
 

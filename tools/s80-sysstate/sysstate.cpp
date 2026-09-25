@@ -17,6 +17,8 @@
 
 #include <e32base.h>
 #include <e32std.h>
+#include <w32std.h>
+#include "../../src/emu/services/include/services/window/rom_bridge_protocol.h"
 
 // RSharedDataClient lives in the ROM's CommonEngine.dll; the S80 DP 2.0 SDK ships COMMONENGINE.LIB but
 // no header. The declarations below match the library's exports (GCC 2.9 mangled names):
@@ -61,6 +63,66 @@ LOCAL_C TInt Publish(RSharedDataClient& aClient) {
     return aClient.SetInt(KStateVal, KSwStateNormal);
 }
 
+// Query the real server instead of reconstructing its private window tree on the host.
+// The endpoint exists only in ROM-wserv mode. Older/HLE hosts keep the original
+// resident state-publisher behavior when Connect returns KErrNotFound.
+class RWindowBridge : public RSessionBase {
+public:
+    TInt Connect() {
+        _LIT(KBridge, "EKA2L1RomWindowBridge");
+        return CreateSession(KBridge, TVersion(1, 0, 0), 1);
+    }
+    TInt Publish(const TDesC8& aSnapshot) {
+        const TAny* args[4] = { &aSnapshot, 0, 0, 0 };
+        return SendReceive(0, args);
+    }
+};
+
+LOCAL_C void BridgeL(RWindowBridge& aBridge) {
+    using namespace eka2l1_rom_bridge;
+    RWsSession ws;
+    User::LeaveIfError(ws.Connect());
+    CleanupClosePushL(ws);
+    CArrayFixFlat<TInt>* ids = new(ELeave) CArrayFixFlat<TInt>(8);
+    CleanupStack::PushL(ids);
+    snapshot* data = new(ELeave) snapshot;
+    CleanupStack::PushL(data);
+    TInt switchResult = KErrNone;
+    FOREVER {
+        ids->Reset();
+        TInt err = ws.WindowGroupList(ids);
+        if (err == KErrNone && ids->Count() <= max_groups) {
+            data->protocol_version = version;
+            data->count = ids->Count();
+            data->focus = ws.GetFocusWindowGroup();
+            data->switch_result = switchResult;
+            for (TInt i = 0; i < ids->Count(); ++i) {
+                group& row = data->groups[i];
+                row.id = (*ids)[i];
+                TThreadId thread;
+                err = ws.GetWindowGroupClientThreadId(row.id, thread);
+                if (err != KErrNone) break;
+                row.thread = thread;
+                TPtr name(row.name, 0, name_capacity);
+                err = ws.GetWindowGroupNameFromIdentifier(row.id, name);
+                if (err != KErrNone) break;
+                row.name_length = name.Length();
+            }
+            if (err == KErrNone) {
+                TPtrC8 bytes((const TUint8*)data, 16 + ids->Count() * sizeof(group));
+                TInt target = aBridge.Publish(bytes);
+                if (target > 0) {
+                    switchResult = ws.SetWindowGroupOrdinalPosition(target, 0);
+                    ws.Flush();
+                    continue; // Publish the resulting focus before waiting again.
+                }
+                if (target < 0) User::Leave(target);
+            }
+        }
+        User::After(250000);
+    }
+}
+
 GLDEF_C TInt E32Main() {
     RSharedDataClient* client = new RSharedDataClient;
     if (!client) {
@@ -76,6 +138,17 @@ GLDEF_C TInt E32Main() {
         client->Close();
         delete client;
         return err;
+    }
+
+    CTrapCleanup* cleanup = CTrapCleanup::New();
+    if (cleanup) {
+        RWindowBridge bridge;
+        if (bridge.Connect() == KErrNone) {
+            TRAPD(bridgeError, BridgeL(bridge));
+            RDebug::Print(_L("SysState window bridge stopped: %d"), bridgeError);
+            bridge.Close();
+        }
+        delete cleanup;
     }
 
     // Stay resident: the temporary category lives with this session. Nothing ever signals us.
