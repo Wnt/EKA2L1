@@ -442,6 +442,7 @@ namespace eka2l1 {
         }
 
         if (!exists && !create) {
+            LOG_TRACE(SERVICE_POSIX, "File not found {}", common::ucs2_to_utf8(path_u16));
             params->ret = -1;
             POSIX_REQUEST_FINISH_WITH_ERR(ctx, ENOENT);
         }

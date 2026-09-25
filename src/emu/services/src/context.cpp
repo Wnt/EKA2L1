@@ -30,6 +30,15 @@
 
 #include <config/config.h>
 
+
+namespace eka2l1::n6diag {
+    bool enabled();
+    bool matches(kernel::thread *thr);
+    void log_ipc_send(kernel_system *kern, const std::string &server, const std::int32_t ord, const std::int32_t *args,
+        const std::int32_t flag, const address sts);
+    void log_completion(kernel_system *kern, const char *what, kernel::thread *target, const address sts, const std::int32_t code);
+}
+
 namespace eka2l1 {
     namespace service {
         ipc_context::ipc_context() {
@@ -142,6 +151,11 @@ namespace eka2l1 {
         void ipc_context::complete(int res) {
             if (msg->request_sts) {
                 kernel_system *kern = sys->get_kernel_system();
+                if (n6diag::enabled()) {
+                    const std::string what = fmt::format("hle-srv {} fn 0x{:X}{}", (msg->msg_session && msg->msg_session->get_server())
+                        ? msg->msg_session->get_server()->name() : std::string("?"), msg->function, signaled ? " (again)" : "");
+                    n6diag::log_completion(kern, what.c_str(), msg->own_thr, msg->request_sts.ptr_address(), res);
+                }
                 (msg->request_sts.get(msg->own_thr->owning_process()))->set(res, kern->is_eka1());
 
                 // Avoid signal twice to cause undefined behavior

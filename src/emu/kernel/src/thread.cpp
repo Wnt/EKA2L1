@@ -38,6 +38,15 @@
 #include <utils/panic.h>
 #include <utils/reqsts.h>
 
+
+namespace eka2l1::n6diag {
+    bool enabled();
+    bool matches(kernel::thread *thr);
+    void log_ipc_send(kernel_system *kern, const std::string &server, const std::int32_t ord, const std::int32_t *args,
+        const std::int32_t flag, const address sts);
+    void log_completion(kernel_system *kern, const char *what, kernel::thread *target, const address sts, const std::int32_t code);
+}
+
 namespace eka2l1 {
     namespace kernel {
         int map_thread_priority_to_calc(thread_priority pri) {
@@ -1084,6 +1093,10 @@ namespace eka2l1 {
             }
 
             kernel_system *kern = requester->get_kernel_object_owner();
+
+            if (n6diag::enabled()) {
+                n6diag::log_completion(kern, "notify_info", requester, sts.ptr_address(), err_code);
+            }
 
             epoc::request_status *sts_real = sts.get(requester->owning_process());
             if (sts_real)

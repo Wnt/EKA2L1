@@ -50,6 +50,15 @@
 #include <ctime>
 #include <utils/err.h>
 
+
+namespace eka2l1::n6diag {
+    bool enabled();
+    bool matches(kernel::thread *thr);
+    void log_ipc_send(kernel_system *kern, const std::string &server, const std::int32_t ord, const std::int32_t *args,
+        const std::int32_t flag, const address sts);
+    void log_completion(kernel_system *kern, const char *what, kernel::thread *target, const address sts, const std::int32_t code);
+}
+
 namespace eka2l1::epoc {
     static security_policy server_exclamation_point_name_policy({ cap_prot_serv });
     static security_policy kill_process_policy({ cap_power_mgmt });
@@ -791,6 +800,12 @@ namespace eka2l1::epoc {
         if (msg->request_sts) {
             epoc::request_status *status = msg->request_sts.get(msg->own_thr->owning_process());
 
+            if (n6diag::enabled()) {
+                const std::string what = fmt::format("guest-srv {} fn {}", (msg->msg_session && msg->msg_session->get_server())
+                    ? msg->msg_session->get_server()->name() : std::string("?"), msg->function);
+                n6diag::log_completion(kern, what.c_str(), msg->own_thr, msg->request_sts.ptr_address(), val);
+            }
+
             if (status)
                 status->set(val, kern->is_eka1());
 
@@ -1356,6 +1371,9 @@ namespace eka2l1::epoc {
         }
 
         const std::string server_name = ss->get_server()->name();
+        if (n6diag::enabled()) {
+            n6diag::log_ipc_send(kern, server_name, ord, arg.args, arg.flag, status.ptr_address());
+        }
         kern->call_ipc_send_callbacks(server_name, ord, arg, status.ptr_address(), kern->crr_thread());
 
         const int result = sync ? ss->send_receive_sync(ord, arg, status) : ss->send_receive(ord, arg, status);
@@ -5533,6 +5551,10 @@ namespace eka2l1::epoc {
         if (!sts) {
             LOG_ERROR(KERNEL, "Status for request complete is null!");
             return;
+        }
+
+        if (n6diag::enabled()) {
+            n6diag::log_completion(kern, "RThread::RequestComplete", thr, *sts_addr, code);
         }
 
         sts->set(code, true);

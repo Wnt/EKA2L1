@@ -44,6 +44,399 @@
 #include <kernel/kernel.h>
 
 #include <cctype>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <csignal>
+#include <cstdlib>
+#include <set>
+
+#include <cpu/arm_interface.h>
+#include <kernel/process.h>
+#include <kernel/thread.h>
+
+// ------------------------------------------------------------------------------------------------------------------
+// Guest-thread diagnostics for stalls that are not a server request (Series 80 Opera, EKA1). Everything here is off
+// unless EKA2L1_DIAG_THREADS is set, and then costs one atomic load per SVC for threads outside the filter.
+//   EKA2L1_DIAG_THREADS=Web,Opera   substring filters on thread/process names: trace their SVCs (args, lr, result),
+//                                   their IPC sends (args + descriptor bytes) and every completion aimed at them
+//   EKA2L1_DIAG_SKIP=0x80,0x6c      SVC numbers not to trace, on top of a default set of hot, uninteresting ones
+//   EKA2L1_DIAG_DUMP_MS=5000        dump every guest thread every N ms of host time (0 = only on SIGUSR1)
+//   SIGUSR1                         dump every guest thread (state, wait object, pc/lr, return addresses on the stack)
+// ------------------------------------------------------------------------------------------------------------------
+namespace eka2l1::n6diag {
+    struct config {
+        bool enabled = false;
+        std::vector<std::string> filters;
+        std::set<std::uint32_t> skip;
+        std::uint64_t dump_ms = 0;
+    };
+
+    static std::atomic<bool> dump_requested{ false };
+    static std::chrono::steady_clock::time_point last_dump = std::chrono::steady_clock::now();
+
+    static void on_sigusr1(int) {
+        dump_requested.store(true);
+    }
+
+    static const config &cfg() {
+        static const config c = [] {
+            config r;
+            const char *filters = std::getenv("EKA2L1_DIAG_THREADS");
+            if (!filters || !*filters) {
+                return r;
+            }
+            r.enabled = true;
+            std::string token;
+            for (const char *p = filters;; p++) {
+                if (*p == ',' || *p == '\0') {
+                    if (!token.empty()) {
+                        r.filters.push_back(token);
+                    }
+                    token.clear();
+                    if (*p == '\0') {
+                        break;
+                    }
+                } else {
+                    token += *p;
+                }
+            }
+            // Hot and uninformative: Dll::Tls, User::Heap, trap frames, trap handler, locked inc/dec, TChar
+            // folding/case/category, descriptor match/find/locate.
+            for (std::uint32_t n : { 0x80u, 0x6Cu, 0x72u, 0x73u, 0x81u, 0x82u, 0x8Du, 0x8Eu, 0x4Fu, 0x51u, 0x52u, 0x53u,
+                     0x800054u, 0x800055u, 0x800056u, 0x800057u, 0x800058u, 0x800059u }) {
+                r.skip.insert(n);
+            }
+            if (const char *skip = std::getenv("EKA2L1_DIAG_SKIP")) {
+                const char *p = skip;
+                while (*p) {
+                    char *end = nullptr;
+                    const unsigned long v = std::strtoul(p, &end, 0);
+                    if (end == p) {
+                        p++;
+                        continue;
+                    }
+                    r.skip.insert(static_cast<std::uint32_t>(v));
+                    p = end;
+                }
+            }
+            if (const char *dump = std::getenv("EKA2L1_DIAG_DUMP_MS")) {
+                r.dump_ms = std::strtoull(dump, nullptr, 10);
+            }
+            std::signal(SIGUSR1, on_sigusr1);
+            LOG_INFO(KERNEL, "N6DIAG on: filters '{}', {} skipped SVCs, dump every {} ms", filters, r.skip.size(), r.dump_ms);
+            return r;
+        }();
+        return c;
+    }
+
+    bool enabled() {
+        return cfg().enabled;
+    }
+
+    bool matches(kernel::thread *thr) {
+        const config &c = cfg();
+        if (!c.enabled || !thr) {
+            return false;
+        }
+        const std::string tn = thr->name();
+        kernel::process *pr = thr->owning_process();
+        const std::string pn = pr ? pr->name() : std::string();
+        for (const auto &f : c.filters) {
+            if ((tn.find(f) != std::string::npos) || (pn.find(f) != std::string::npos)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // "dll+0xOFF (ordN+0xM)" for an address inside a loaded code segment, "" otherwise.
+    std::string describe(kernel_system *kern, kernel::process *pr, const address addr) {
+        const address a = addr & ~1u;
+        if (a < 0x1000) {
+            return std::string();
+        }
+        for (const auto &obj : kern->get_codeseg_list()) {
+            kernel::codeseg *seg = reinterpret_cast<kernel::codeseg *>(obj.get());
+            if (!seg) {
+                continue;
+            }
+            const address beg = seg->get_code_run_addr(pr);
+            if (!beg) {
+                continue;
+            }
+            const address end = beg + seg->get_text_size();
+            if ((a < beg) || (a >= end)) {
+                continue;
+            }
+            std::uint32_t best_ord = 0;
+            address best = 0;
+            const std::vector<std::uint32_t> exports = seg->get_export_table(pr);
+            for (std::size_t i = 0; i < exports.size(); i++) {
+                const address e = exports[i] & ~1u;
+                if ((e <= a) && (e > best) && (e >= beg)) {
+                    best = e;
+                    best_ord = static_cast<std::uint32_t>(i + 1);
+                }
+            }
+            if (best) {
+                return fmt::format("{}+0x{:X} (ord{}+0x{:X})", seg->name(), a - beg, best_ord, a - best);
+            }
+            return fmt::format("{}+0x{:X}", seg->name(), a - beg);
+        }
+        return std::string();
+    }
+
+    static const char *state_name(kernel::thread_state s) {
+        switch (s) {
+        case kernel::thread_state::create:
+            return "create";
+        case kernel::thread_state::run:
+            return "run";
+        case kernel::thread_state::wait:
+            return "wait(suspended)";
+        case kernel::thread_state::ready:
+            return "ready";
+        case kernel::thread_state::stop:
+            return "stop";
+        case kernel::thread_state::wait_fast_sema:
+            return "wait_sema";
+        case kernel::thread_state::wait_mutex:
+            return "wait_mutex";
+        case kernel::thread_state::wait_condvar:
+            return "wait_condvar";
+        case kernel::thread_state::wait_mutex_suspend:
+            return "wait_mutex_suspend";
+        case kernel::thread_state::wait_fast_sema_suspend:
+            return "wait_sema_suspend";
+        case kernel::thread_state::wait_condvar_suspend:
+            return "wait_condvar_suspend";
+        case kernel::thread_state::hold_mutex_pending:
+            return "hold_mutex_pending";
+        case kernel::thread_state::wait_dfc:
+            return "wait_dfc";
+        case kernel::thread_state::wait_hle:
+            return "wait_hle";
+        default:
+            break;
+        }
+        return "?";
+    }
+
+
+    static bool read32(kernel::process *pr, const address a, std::uint32_t &out) {
+        const std::uint32_t *p = reinterpret_cast<const std::uint32_t *>(pr->get_ptr_on_addr_space(a));
+        if (!p) {
+            return false;
+        }
+        out = *p;
+        return true;
+    }
+
+    // Walk the thread's CActiveScheduler queue (EKA1 layout, e32base.h: CActiveScheduler {vptr, iLevel, TPriQue
+    // iActiveQ {iHead.iNext, iHead.iPrev, iOffset}}, CActive {vptr, iStatus, iActive, iLink {iNext, iPrev,
+    // iPriority}}) and print every active object: class (vtable), status, active flag, priority, and the words after
+    // CActive (a CIdle / CAsyncCallBack TCallBack, a CTimer RTimer handle, a CPeriodic callback).
+    static void dump_active_objects(kernel_system *kern, kernel::thread *thr) {
+        kernel::process *pr = thr->owning_process();
+        kernel::thread_local_data *ld = thr->get_local_data();
+        if (!ld || !pr) {
+            return;
+        }
+        const address sched = ld->scheduler.ptr_address();
+        if (!sched) {
+            LOG_INFO(KERNEL, "N6AO '{}' has no active scheduler", thr->name());
+            return;
+        }
+        std::uint32_t vt = 0, level = 0, next = 0, off = 0;
+        read32(pr, sched, vt);
+        read32(pr, sched + 4, level);
+        read32(pr, sched + 8, next);
+        read32(pr, sched + 16, off);
+        LOG_INFO(KERNEL, "N6AO '{}' scheduler {:08X} vt {:08X} [{}] level {} queue offset {}", thr->name(), sched, vt,
+            describe(kern, pr, vt), level, off);
+        const address head = sched + 8;
+        for (int n = 0; next && (next != head) && (n < 256); n++) {
+            const address ao = next - off;
+            std::uint32_t w[12] = {};
+            for (int i = 0; i < 12; i++) {
+                read32(pr, ao + i * 4, w[i]);
+            }
+            std::uint32_t v[6] = {};
+            for (int i = 0; i < 6; i++) {
+                read32(pr, w[0] + i * 4, v[i]);
+            }
+            std::string vtab;
+            for (int i = 0; i < 6; i++) {
+                const std::string d = describe(kern, pr, v[i]);
+                vtab += fmt::format(" v{}={:X}{}", i, v[i], d.empty() ? std::string() : ("[" + d + "]"));
+            }
+            LOG_INFO(KERNEL, "N6AO   #{} ao {:08X} vt {:08X} [{}] status {} active {} pri {} | +24 {:08X}{} +28 {:08X} +32 {:08X}{} +36 {:08X}"
+                " +40 {:08X} +44 {:08X} |{}", n, ao, w[0], describe(kern, pr, w[0]), static_cast<std::int32_t>(w[1]), w[2],
+                static_cast<std::int32_t>(w[5]), w[6], describe(kern, pr, w[6]).empty() ? std::string() : ("[" + describe(kern, pr, w[6]) + "]"),
+                w[7], w[8], describe(kern, pr, w[8]).empty() ? std::string() : ("[" + describe(kern, pr, w[8]) + "]"), w[9], w[10], w[11], vtab);
+            if (!read32(pr, next, next)) {
+                break;
+            }
+        }
+    }
+
+    void dump_threads(kernel_system *kern, const char *why) {
+        kernel::thread *crr = kern->crr_thread();
+        LOG_INFO(KERNEL, "N6DIAG ===== guest thread dump ({}) current '{}' =====", why, crr ? crr->name() : "-");
+        for (const auto &obj : kern->get_thread_list()) {
+            kernel::thread *thr = reinterpret_cast<kernel::thread *>(obj.get());
+            if (!thr) {
+                continue;
+            }
+            kernel::process *pr = thr->owning_process();
+            arm::core::thread_context ctx = thr->get_thread_context();
+            if (thr == crr) {
+                kern->get_cpu()->save_context(ctx);
+            }
+            std::string wait = "-";
+            if (thr->wait_obj) {
+                wait = fmt::format("{}:{}", static_cast<int>(thr->wait_obj->get_object_type()), thr->wait_obj->name());
+            }
+            LOG_INFO(KERNEL, "N6DIAG thr '{}' proc '{}' state {} pri {} req {} wait {} pc {:08X} [{}] lr {:08X} [{}] sp {:08X}"
+                " r0 {:08X} r1 {:08X} r2 {:08X} r3 {:08X}",
+                thr->name(), pr ? pr->name() : "-", state_name(thr->current_state()), thr->current_real_priority(),
+                thr->request_count(), wait, ctx.get_pc(), describe(kern, pr, ctx.get_pc()), ctx.get_lr(),
+                describe(kern, pr, ctx.get_lr()), ctx.get_sp(), ctx.cpu_registers[0], ctx.cpu_registers[1],
+                ctx.cpu_registers[2], ctx.cpu_registers[3]);
+            if (!matches(thr) || !pr) {
+                continue;
+            }
+            dump_active_objects(kern, thr);
+            // Return addresses on the stack (stale ones included): the nearest code above the wait.
+            const address sp = ctx.get_sp();
+            int shown = 0;
+            for (std::uint32_t i = 0; (i < 2048) && (shown < 48); i++) {
+                const std::uint32_t *w = reinterpret_cast<const std::uint32_t *>(pr->get_ptr_on_addr_space(sp + i * 4));
+                if (!w) {
+                    break;
+                }
+                const std::string d = describe(kern, pr, *w);
+                if (!d.empty()) {
+                    LOG_INFO(KERNEL, "N6DIAG   '{}' sp+0x{:X}: {:08X} {}", thr->name(), i * 4, *w, d);
+                    shown++;
+                }
+            }
+        }
+        LOG_INFO(KERNEL, "N6DIAG ===== end of dump =====");
+    }
+
+    void maybe_dump(kernel_system *kern) {
+        const config &c = cfg();
+        if (!c.enabled) {
+            return;
+        }
+        if (dump_requested.exchange(false)) {
+            dump_threads(kern, "SIGUSR1");
+        }
+        if (c.dump_ms) {
+            const auto now = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_dump).count() >= static_cast<std::int64_t>(c.dump_ms)) {
+                last_dump = now;
+                dump_threads(kern, "periodic");
+            }
+        }
+    }
+
+    bool trace_svc(std::uint32_t svcnum) {
+        const config &c = cfg();
+        return c.enabled && !c.skip.count(svcnum);
+    }
+
+    // Bytes a guest descriptor at addr describes, if addr looks like one (type 0..4, sane length).
+    static std::string peek_descriptor(kernel::process *pr, const address addr) {
+        if (!pr || (addr < 0x1000)) {
+            return std::string();
+        }
+        const std::uint32_t *hdr = reinterpret_cast<const std::uint32_t *>(pr->get_ptr_on_addr_space(addr));
+        if (!hdr) {
+            return std::string();
+        }
+        const std::uint32_t type = hdr[0] >> 28;
+        const std::uint32_t len = hdr[0] & 0x0FFFFFFF;
+        if ((type > 4) || (len > 0x2000)) {
+            return std::string();
+        }
+        address data = 0;
+        switch (type) {
+        case 0:
+            data = addr + 4;
+            break;
+        case 1: {
+            const std::uint32_t *p = reinterpret_cast<const std::uint32_t *>(pr->get_ptr_on_addr_space(addr + 4));
+            data = p ? *p : 0;
+            break;
+        }
+        case 2: {
+            const std::uint32_t *p = reinterpret_cast<const std::uint32_t *>(pr->get_ptr_on_addr_space(addr + 8));
+            data = p ? *p : 0;
+            break;
+        }
+        case 3:
+            data = addr + 8;
+            break;
+        case 4: {
+            const std::uint32_t *p = reinterpret_cast<const std::uint32_t *>(pr->get_ptr_on_addr_space(addr + 8));
+            data = p ? (*p + 4) : 0;
+            break;
+        }
+        default:
+            break;
+        }
+        std::string hex;
+        std::string text;
+        const std::uint32_t show = std::min<std::uint32_t>(len * 2, 64);
+        for (std::uint32_t i = 0; i < show; i++) {
+            const std::uint8_t *b = data ? reinterpret_cast<const std::uint8_t *>(pr->get_ptr_on_addr_space(data + i)) : nullptr;
+            if (!b) {
+                break;
+            }
+            hex += fmt::format("{:02X}", *b);
+            if (*b >= 0x20 && *b < 0x7F) {
+                text += static_cast<char>(*b);
+            } else if (*b) {
+                text += '.';
+            }
+        }
+        return fmt::format("des(t{} len {} '{}' {})", type, len, text, hex);
+    }
+
+    void log_ipc_send(kernel_system *kern, const std::string &server, const std::int32_t ord, const std::int32_t *args,
+        const std::int32_t flag, const address sts) {
+        kernel::thread *thr = kern->crr_thread();
+        if (!matches(thr)) {
+            return;
+        }
+        kernel::process *pr = thr->owning_process();
+        arm::core *cpu = kern->get_cpu();
+        std::string decoded;
+        for (int i = 0; i < 4; i++) {
+            const std::string d = peek_descriptor(pr, static_cast<address>(args[i]));
+            if (!d.empty()) {
+                decoded += fmt::format(" | a{} {}", i, d);
+            }
+        }
+        LOG_TRACE(KERNEL, "N6IPC {} -> {} fn {} (0x{:X}) flag 0x{:X} args {:X} {:X} {:X} {:X} sts 0x{:X} lr {:X} [{}]{}", thr->name(),
+            server, ord, static_cast<std::uint32_t>(ord), static_cast<std::uint32_t>(flag), static_cast<std::uint32_t>(args[0]),
+            static_cast<std::uint32_t>(args[1]), static_cast<std::uint32_t>(args[2]), static_cast<std::uint32_t>(args[3]), sts,
+            cpu->get_lr(), describe(kern, pr, cpu->get_lr()), decoded);
+    }
+
+    void log_completion(kernel_system *kern, const char *what, kernel::thread *target, const address sts, const std::int32_t code) {
+        if (!matches(target)) {
+            return;
+        }
+        kernel::thread *crr = kern->crr_thread();
+        LOG_TRACE(KERNEL, "N6CMP {} -> '{}' sts 0x{:X} code {} (by '{}', target state {}, req count before signal {})", what,
+            target->name(), sts, code, crr ? crr->name() : "-", state_name(target->current_state()), target->request_count());
+    }
+}
+
 
 namespace eka2l1::hle {
     static std::array<std::u16string, 2> LDD_SKIP_LOAD_LIST = {
@@ -1178,8 +1571,18 @@ namespace eka2l1::hle {
 
         auto res = svc_funcs_.find(svcnum);
 
+        if (n6diag::enabled()) {
+            n6diag::maybe_dump(kern_);
+        }
+
         if (res == svc_funcs_.end()) {
             LOG_ERROR(KERNEL, "Unimplement system call: 0x{:X}!", svcnum);
+            if (n6diag::enabled()) {
+                kernel::thread *t = kern_->crr_thread();
+                LOG_ERROR(KERNEL, "N6SVC unimplemented 0x{:X} from '{}' r0 {:X} r1 {:X} lr {:X} [{}]", svcnum, t ? t->name() : "-",
+                    kern_->get_cpu()->get_reg(0), kern_->get_cpu()->get_reg(1), kern_->get_cpu()->get_lr(),
+                    n6diag::describe(kern_, t ? t->owning_process() : nullptr, kern_->get_cpu()->get_lr()));
+            }
 
             kern_->unlock();
             return false;
@@ -1191,7 +1594,24 @@ namespace eka2l1::hle {
             LOG_TRACE(KERNEL, "Calling SVC 0x{:x} {}", svcnum, func.name);
         }
 
+        kernel::thread *diag_thr = nullptr;
+        if (n6diag::enabled() && n6diag::trace_svc(svcnum)) {
+            kernel::thread *t = kern_->crr_thread();
+            if (n6diag::matches(t)) {
+                diag_thr = t;
+                arm::core *cpu = kern_->get_cpu();
+                LOG_TRACE(KERNEL, "N6SVC '{}' 0x{:X} {} r0 {:X} r1 {:X} r2 {:X} r3 {:X} lr {:X} [{}] req {}", t->name(), svcnum, func.name,
+                    cpu->get_reg(0), cpu->get_reg(1), cpu->get_reg(2), cpu->get_reg(3), cpu->get_lr(),
+                    n6diag::describe(kern_, t->owning_process(), cpu->get_lr()), t->request_count());
+            }
+        }
+
         func.func(kern_, kern_->crr_process(), kern_->get_cpu());
+
+        if (diag_thr) {
+            LOG_TRACE(KERNEL, "N6SVC '{}' 0x{:X} -> r0 {:X} req {}", diag_thr->name(), svcnum, kern_->get_cpu()->get_reg(0),
+                diag_thr->request_count());
+        }
 
         kern_->unlock();
         return true;
