@@ -59,6 +59,7 @@ namespace eka2l1::mem {
         // Try to find existing unoccpied page directory
         for (std::size_t i = 0; i < dirs_.size(); i++) {
             if (!dirs_[i]->occupied()) {
+                dirs_[i]->reset();
                 dirs_[i]->occupied_ = true;
                 return dirs_[i]->id();
             }
@@ -74,6 +75,16 @@ namespace eka2l1::mem {
         dirs_.back()->occupied_ = true;
 
         return static_cast<asid>(dirs_.size());
+    }
+
+    void control_multiple::free_addr_space(const asid id) {
+        if ((id <= 0) || (static_cast<std::size_t>(id) > dirs_.size())) {
+            return;
+        }
+
+        page_directory *dir = dirs_[id - 1].get();
+        dir->reset();
+        dir->occupied(false);
     }
 
     void control_multiple::assign_page_table(page_table *tab, const vm_address linear_addr, const std::uint32_t flags, asid *id_list, const std::uint32_t id_list_size) {

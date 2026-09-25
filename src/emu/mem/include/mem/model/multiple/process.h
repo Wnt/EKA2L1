@@ -42,8 +42,7 @@ namespace eka2l1::mem {
     public:
         explicit multiple_mem_model_process(control_base *ctrl);
 
-        ~multiple_mem_model_process() override {
-        }
+        ~multiple_mem_model_process() override;
 
         const asid address_space_id() const override {
             return addr_space_id_;
