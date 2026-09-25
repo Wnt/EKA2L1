@@ -27,5 +27,6 @@ namespace eka2l1 {
         /*! \brief Initialize all services and properties. */
         void init_services(system *sys);
         void init_services_post_bootup(system *sys);
+        void start_prestart_processes(system *sys);
     }
 }

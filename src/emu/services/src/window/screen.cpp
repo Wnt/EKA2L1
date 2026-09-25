@@ -1064,7 +1064,11 @@ namespace eka2l1::epoc {
                 if ((winuser->win_type != epoc::window_type::blank) || (!winuser->scr->scr_config.blt_offscreen)) {
                     if (!visible_left_region_.empty() && winuser->is_visible()) {
                         if (winuser->flags & epoc::window::flag_shape_region) {
+                            // A shape never reaches beyond the window's extent: a shaped window made smaller
+                            // (a Series 80 app collapses its left skin panel to zero height when the Eikon
+                            // server's narrow status strip takes that column) covers only what is left of it.
                             winuser->visible_region = winuser->shape_region;
+                            winuser->visible_region.clip(winuser->abs_rect);
                         } else {
                             winuser->visible_region.add_rect(winuser->abs_rect);
                         }

@@ -1294,6 +1294,52 @@ namespace eka2l1 {
         return "?";
     }
 
+    // The image a code address lies in, as "name+0xoffset" (loaded code segments first, then the ROM's XIP
+    // file table), or "" if it is not code. Names what a parked thread was calling without any disassembly.
+    static bool ipc_watch_rom_name(const loader::rom_dir &dir, const std::uint32_t addr, std::string &name,
+        std::uint32_t &offset) {
+        static constexpr std::uint8_t FILE_ATTRIB_DIR = 0x10;
+        for (const auto &entry : dir.entries) {
+            if (entry.attrib & FILE_ATTRIB_DIR) {
+                continue;
+            }
+            if ((entry.address_lin <= addr) && (addr - entry.address_lin < entry.size)) {
+                name = common::ucs2_to_utf8(entry.name);
+                offset = addr - entry.address_lin;
+                return true;
+            }
+        }
+        for (const auto &subdir : dir.subdirs) {
+            if (ipc_watch_rom_name(subdir, addr, name, offset)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static std::string ipc_watch_code_name(kernel_system *kern, kernel::process *pr, const std::uint32_t addr) {
+        for (const auto &seg_obj : kern->get_codeseg_list()) {
+            codeseg_ptr seg = reinterpret_cast<codeseg_ptr>(seg_obj.get());
+            if (!seg) {
+                continue;
+            }
+            const address beg = seg->get_code_run_addr(pr);
+            if (beg && (beg <= addr) && (addr < beg + seg->get_text_size())) {
+                return fmt::format("{}+0x{:x}", seg->name(), addr - beg);
+            }
+        }
+        if (loader::rom *rom = kern->get_rom_info()) {
+            for (const auto &root : rom->root.root_dirs) {
+                std::string name;
+                std::uint32_t offset = 0;
+                if (ipc_watch_rom_name(root.dir, addr, name, offset)) {
+                    return fmt::format("{}+0x{:x}", name, offset);
+                }
+            }
+        }
+        return "";
+    }
+
     // Diagnostic (env EKA2L1_IPC_WATCH_SECS=N): every N emulated seconds, log each IPC message that has been
     // sent and not completed, with its client thread, server and function, plus every guest thread that is not
     // runnable. A guest app that stops painting is usually a thread parked on a request no server answers;
@@ -1322,10 +1368,13 @@ namespace eka2l1 {
                 server_name = msg->msg_session->get_server()->name();
             }
 
-            LOG_ERROR(KERNEL, "  msg {}: {} -> {} function {} (0x{:X}) {} {}", msg->id,
+            LOG_ERROR(KERNEL, "  msg {}: {} -> {} function {} (0x{:X}) {} {} a=[{:08x} {:08x} {:08x} {:08x}]{}", msg->id,
                 msg->own_thr ? msg->own_thr->name() : std::string("?"), server_name, msg->function,
                 msg->function, (msg->type == ipc_message_type_sync) ? "sync" : "session",
-                ipc_status_name(msg->msg_status));
+                ipc_status_name(msg->msg_status), static_cast<std::uint32_t>(msg->args.args[0]),
+                static_cast<std::uint32_t>(msg->args.args[1]), static_cast<std::uint32_t>(msg->args.args[2]),
+                static_cast<std::uint32_t>(msg->args.args[3]),
+                (msg->msg_session && msg->msg_session->get_server() && msg->msg_session->get_server()->is_hle()) ? " (HLE)" : "");
         }
 
         for (auto &obj : kern->get_thread_list()) {
@@ -1339,8 +1388,35 @@ namespace eka2l1 {
                 continue;
             }
 
-            LOG_ERROR(KERNEL, "  thread {} ({}): {}", thr->name(),
-                thr->owning_process() ? thr->owning_process()->name() : std::string("?"), thread_state_name(st));
+            kernel::process *pr = thr->owning_process();
+            arm::core::thread_context &ctx = thr->get_thread_context();
+            LOG_ERROR(KERNEL, "  thread {} ({}): {} pc {} lr {}", thr->name(),
+                pr ? pr->name() : std::string("?"), thread_state_name(st), ipc_watch_code_name(kern, pr, ctx.get_pc()),
+                ipc_watch_code_name(kern, pr, ctx.cpu_registers[14] & ~1u));
+
+            // Code addresses on its stack, innermost first: a cheap backtrace of where it parked.
+            if (pr) {
+                std::string trace;
+                std::uint32_t sp = ctx.cpu_registers[13];
+                int found = 0;
+                for (int i = 0; (i < 256) && (found < 12); i++, sp += 4) {
+                    const std::uint32_t *word = reinterpret_cast<const std::uint32_t *>(pr->get_ptr_on_addr_space(sp));
+                    if (!word) {
+                        break;
+                    }
+                    if (*word < 0x10000) {
+                        continue;
+                    }
+                    const std::string where = ipc_watch_code_name(kern, pr, *word & ~1u);
+                    if (!where.empty()) {
+                        trace += " " + where;
+                        found++;
+                    }
+                }
+                if (!trace.empty()) {
+                    LOG_ERROR(KERNEL, "    stack:{}", trace);
+                }
+            }
         }
     }
 
