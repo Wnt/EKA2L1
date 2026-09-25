@@ -18,6 +18,8 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <cstdio>
+#include <cstdlib>
 #include <services/window/classes/dsa.h>
 #include <services/window/classes/gctx.h>
 #include <services/window/classes/scrdvc.h>
@@ -892,7 +894,22 @@ namespace eka2l1::epoc {
     bool canvas_base::execute_command_detail(service::ipc_context &ctx, ws_cmd &cmd, bool &did_it) {
         bool result = execute_command_for_general_node(ctx, cmd);
         bool quit = false;
-        //LOG_TRACE(SERVICE_WINDOW, "Window user op: {}", (int)cmd.header.op);
+        {
+            // Diagnostic: EKA2L1_WS_GC_TRACE=1 also logs window commands (stderr).
+            static const bool win_trace = (std::getenv("EKA2L1_WS_GC_TRACE") != nullptr);
+            if (win_trace) {
+                std::string hex;
+                const std::uint8_t *b = reinterpret_cast<const std::uint8_t *>(cmd.data_ptr);
+                const int n = std::min<int>(cmd.header.cmd_len, 24);
+                char tmp[4];
+                for (int i = 0; i < n && b; i++) {
+                    std::snprintf(tmp, sizeof(tmp), "%02x", b[i]);
+                    hex += tmp;
+                    if ((i & 3) == 3) hex += ' ';
+                }
+                std::fprintf(stderr, "WNT win=%08x op=%u len=%u %s\n", id, cmd.header.op, cmd.header.cmd_len, hex.c_str());
+            }
+        }
 
         did_it = true;
 
@@ -1467,10 +1484,17 @@ namespace eka2l1::epoc {
             eka2l1::rect full_size_rect(eka2l1::vec2(0, 0), abs_rect.size);
 
             // Not in redraw? Try to cleanup non redraw segments to make ways
+            const std::size_t segment_count_before = redraw_segments_.get_segments().size();
             if (redraw_segments_.clean_old_nonredraw_segments()) {
-                // With no redraw store, segments aging is ineffective. So just ignore...
-                if (!client->get_ws().no_redraw_storing_enabled())
+                // Dropping a segment loses its pixels on the next recomposite, so the client has to paint them
+                // again. Without redraw storing (Symbian OS 7.0s and older) that is only needed when a segment
+                // really went: WSERV would still hold those pixels on the screen. Not asking for the redraw
+                // there lost them silently, and in the logical draw modes it did worse: Series 80 Sheet's
+                // cell cursor draw aged out while its later NOTSCREEN erase stayed, which painted a ghost frame.
+                if (!client->get_ws().no_redraw_storing_enabled()
+                    || (redraw_segments_.get_segments().size() < segment_count_before)) {
                     invalidate(full_size_rect);
+                }
             }
 
             gdi_store_command_segment *current_segment = redraw_segments_.get_current_segment();
@@ -1584,16 +1608,31 @@ namespace eka2l1::epoc {
             draw_surface(builder, background_surface_);
 
             if (!segments.empty()) {
-                builder.clip_bitmap_region(visible_region, scr->display_scale_factor);
-
-                gdi_command_builder gdi_builder(client->get_ws().get_graphics_driver(), builder,
-                    *client->get_ws().get_bitmap_cache(), filter, abs_rect.top, scr->display_scale_factor,
-                    visible_region);
-
                 for (std::size_t i = 0; i < segments.size(); i++) {
-                    if (segments[i]->type_ != gdi_store_command_segment_pending_redraw) {
-                        gdi_builder.build_segment(*segments[i]);
+                    if (segments[i]->type_ == gdi_store_command_segment_pending_redraw) {
+                        continue;
                     }
+
+                    // A segment replays only where it is still valid: a later redraw took over the rest of it
+                    // (promote_last_segment). Unclipped, an old segment's drawing came back over the newer
+                    // redraw, which is invisible for opaque paint but not for the logical draw modes: a cell
+                    // cursor inverted in EDrawModeNOTSCREEN by a segment and again by the redraw that
+                    // superseded it cancelled out, and its erase later left an inverted line behind.
+                    common::region segment_clip = segments[i]->region_;
+                    segment_clip.advance(abs_rect.top);
+                    segment_clip = segment_clip.intersect(visible_region);
+
+                    if (segment_clip.empty()) {
+                        continue;
+                    }
+
+                    builder.clip_bitmap_region(segment_clip, scr->display_scale_factor);
+
+                    gdi_command_builder gdi_builder(client->get_ws().get_graphics_driver(), builder,
+                        *client->get_ws().get_bitmap_cache(), filter, abs_rect.top, scr->display_scale_factor,
+                        segment_clip);
+
+                    gdi_builder.build_segment(*segments[i]);
                 }
             }
         }

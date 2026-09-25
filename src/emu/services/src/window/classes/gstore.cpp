@@ -204,6 +204,73 @@ namespace eka2l1::epoc {
         current_segment_ = nullptr;
     }
 
+    gdi_rect_outline gdi_split_rect_outline(const eka2l1::rect &area, const eka2l1::vec2 &pen_size) {
+        gdi_rect_outline result;
+
+        if ((area.size.x <= 0) || (area.size.y <= 0)) {
+            return result;
+        }
+
+        if ((pen_size.x <= 0) || (pen_size.y <= 0)) {
+            result.fill = area;
+            result.has_fill = true;
+            return result;
+        }
+
+        const eka2l1::vec2 pen_in((pen_size.x + 1) / 2, (pen_size.y + 1) / 2);
+        const eka2l1::vec2 pen_out((pen_size.x - 1) / 2, (pen_size.y - 1) / 2);
+
+        const eka2l1::rect inner(area.top + pen_in, area.size - pen_in * 2);
+        if ((inner.size.x > 0) && (inner.size.y > 0)) {
+            result.fill = inner;
+            result.has_fill = true;
+        }
+
+        const eka2l1::rect outer(area.top - pen_out, area.size + pen_out * 2);
+        const int band_x = pen_out.x + pen_in.x;
+        const int band_y = pen_out.y + pen_in.y;
+
+        auto add_edge = [&](const eka2l1::rect &edge) {
+            if ((edge.size.x > 0) && (edge.size.y > 0)) {
+                result.edges[result.edge_count++] = edge;
+            }
+        };
+
+        const int top_h = std::min(band_y, outer.size.y);
+        add_edge(eka2l1::rect(outer.top, { outer.size.x, top_h }));
+
+        const int bottom_h = std::min(band_y, outer.size.y - top_h);
+        add_edge(eka2l1::rect({ outer.top.x, outer.top.y + outer.size.y - bottom_h }, { outer.size.x, bottom_h }));
+
+        const int middle_y = outer.top.y + top_h;
+        const int middle_h = outer.size.y - top_h - bottom_h;
+        const int left_w = std::min(band_x, outer.size.x);
+        add_edge(eka2l1::rect({ outer.top.x, middle_y }, { left_w, middle_h }));
+
+        const int right_w = std::min(band_x, outer.size.x - left_w);
+        add_edge(eka2l1::rect({ outer.top.x + outer.size.x - right_w, middle_y }, { right_w, middle_h }));
+
+        return result;
+    }
+
+    eka2l1::rect gdi_axis_line_rect(const eka2l1::vec2 &start, const eka2l1::vec2 &end, const eka2l1::vec2 &pen_size) {
+        const eka2l1::vec2 pen = { std::max(1, pen_size.x), std::max(1, pen_size.y) };
+
+        if ((start.x == end.x) && (start.y == end.y)) {
+            return eka2l1::rect({ start.x - pen.x / 2, start.y - pen.y / 2 }, pen);
+        }
+
+        if (start.y == end.y) {
+            const int first = (start.x < end.x) ? start.x : (end.x + 1);
+            const int last = (start.x < end.x) ? (end.x - 1) : start.x;
+            return eka2l1::rect({ first - pen.x / 2, start.y - pen.y / 2 }, { last - first + pen.x, pen.y });
+        }
+
+        const int first = (start.y < end.y) ? start.y : (end.y + 1);
+        const int last = (start.y < end.y) ? (end.y - 1) : start.y;
+        return eka2l1::rect({ start.x - pen.x / 2, first - pen.y / 2 }, { pen.x, last - first + pen.y });
+    }
+
     std::uint32_t gdi_expand_draw_mode(const std::uint32_t mode, eka2l1::vec4 &color, gdi_draw_mode_pass *passes) {
         const auto invert = [](const eka2l1::vec4 &c) {
             return eka2l1::vec4(255 - c.x, 255 - c.y, 255 - c.z, c.w);
@@ -382,6 +449,7 @@ namespace eka2l1::epoc {
     }
 
     void gdi_command_builder::build_command_draw_line(const gdi_store_command_draw_line_data &cmd) {
+
         draw_with_mode(cmd.color_, [&]() {
             build_line_geometry(cmd);
         });
@@ -392,25 +460,19 @@ namespace eka2l1::epoc {
         eka2l1::point scaled_end = (cmd.end_ + position_) * scale_factor_;
 
 
-        // Trying to emulate brush size here. There's more complexity in adding a real variant.
-        if (cmd.style_ == drivers::pen_style_solid) {
-            if (((scale_factor_ != 1.0f) || ((cmd.pen_size_.x != 1) || (cmd.pen_size_.y != 1))) && ((cmd.start_.x == cmd.end_.x)
-                || (cmd.start_.y == cmd.end_.y))) {
-                eka2l1::rect draw_rect;
-                draw_rect.top = scaled_start - (cmd.pen_size_ * (scale_factor_ / 2.0f));
-                if (cmd.start_.x == cmd.end_.x) {
-                    if (cmd.start_.y == cmd.end_.y) {
-                        draw_rect.size = cmd.pen_size_ * scale_factor_;
-                    } else {
-                        draw_rect.size = eka2l1::vec2(static_cast<int>(std::roundf(cmd.pen_size_.x * scale_factor_)), scaled_end.y - scaled_start.y + static_cast<int>(std::roundf(cmd.pen_size_.y * scale_factor_ / 2.0f)));
-                    }
-                } else {
-                    draw_rect.size = eka2l1::vec2(scaled_end.x - scaled_start.x + static_cast<int>(std::roundf(cmd.pen_size_.x * scale_factor_ / 2.0f)), static_cast<int>(std::roundf(cmd.pen_size_.y * scale_factor_)));
-                }
+        // A solid axis-aligned line is a rectangle of pen dots. CFbsBitGc::DrawLine plots from the start point
+        // up to, but not including, the end point, whichever way the line runs, and centres a pen of width w
+        // on it (w / 2 before the line, the rest after). A GL line through integer coordinates runs along pixel
+        // edges instead, so whether it lit the row or column was up to the rasterizer: in a retained window
+        // (drawn at 1x) Series 80 Sheet's formula-bar frame lines at x = 0 and y = 0 lit nothing at all, and
+        // lines running right-to-left or bottom-to-top were dropped on the scaled path.
+        if ((cmd.style_ == drivers::pen_style_solid) && ((cmd.start_.x == cmd.end_.x) || (cmd.start_.y == cmd.end_.y))) {
+            eka2l1::rect line_rect = gdi_axis_line_rect(cmd.start_, cmd.end_, cmd.pen_size_);
+            line_rect.top += position_;
+            scale_rectangle(line_rect, scale_factor_);
 
-                builder_.draw_rectangle(draw_rect);
-                return;
-            }
+            builder_.draw_rectangle(line_rect);
+            return;
         }
 
         builder_.set_pen_style(cmd.style_);
