@@ -774,8 +774,37 @@ namespace eka2l1::epoc {
         ctx.complete(static_cast<int>(win->get_client_handle()));
     }
 
+    // WSERV reports only the part of an invalid region that is not covered by the window's children.
+    // Series 80 Contacts' New card relies on it: a scrolling container makes an outer RWindow with
+    // the handle (this | 1), fully covered by an inner child window with the handle (this). CONE
+    // panics CONE 46 (ECoePanicInvalidHandle) on any redraw for a handle that is not 4-aligned, so
+    // queueing the outer window's activation redraw killed Contacts. Coverage is judged when the
+    // client fetches the redraw, like WSERV, since the children are activated after the parent.
+    static bool redraw_hidden_by_children(const epoc::redraw_event_full &full) {
+        auto *win = reinterpret_cast<epoc::canvas_base *>(full.owner_);
+        if (!win) {
+            return false;
+        }
+
+        std::vector<eka2l1::rect> covers;
+        for (epoc::window *child = win->child; child; child = child->sibling) {
+            if (child->type != epoc::window_kind::client) {
+                continue;
+            }
+
+            auto *child_canvas = reinterpret_cast<epoc::canvas_base *>(child);
+            if (!child_canvas->is_visible() || (child_canvas->flags & (epoc::window::flags_enable_alpha | epoc::window::flag_shape_region))) {
+                continue;
+            }
+
+            covers.push_back(child_canvas->abs_rect);
+        }
+
+        return epoc::redraw_covered_by(full.evt_, win->abs_rect.top, covers);
+    }
+
     void window_server_client::get_redraw(service::ipc_context &ctx, ws_cmd &cmd) {
-        auto evt = redraws.get_evt_opt();
+        auto evt = redraws.get_visible_evt_opt(redraw_hidden_by_children);
 
         if (!evt) {
             // Report back a null redraw event
