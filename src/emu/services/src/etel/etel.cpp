@@ -432,8 +432,9 @@ namespace eka2l1 {
                 is_supported_by_module(ctx);
                 break;
 
-            // RTelServer::SetPriorityClient and SetExtendedErrorGranularity only record a preference.
-            // Left unanswered, the Series 80 Contacts app blocked on 14 before its first redraw.
+            // RTelServer::SetPriorityClient and SetExtendedErrorGranularity only record a preference. The
+            // 7.0s Series 80 servers (SecurityServer, CbsServer, SatServer) send them right after
+            // LoadPhoneModule, and the Contacts app blocked on 14 before its first redraw.
             case epoc::etel_old_set_priority_client:
             case epoc::etel_old_set_extend_error_granularity:
                 ctx->complete(epoc::error_none);
@@ -449,7 +450,11 @@ namespace eka2l1 {
                     }
                 }
 
-                LOG_ERROR(SERVICE_ETEL, "Unimplemented ETel server opcode {}", ctx->msg->function);
+                // A synchronous request left pending stops the client thread for good; the
+                // ROM's SecurityServer never came up because of exactly that, and EikSrvUi
+                // cannot construct without it.
+                LOG_ERROR(SERVICE_ETEL, "Unimplemented ETel server opcode {}, completed as not supported", ctx->msg->function);
+                ctx->complete(epoc::error_not_supported);
                 break;
             }
         } else {
