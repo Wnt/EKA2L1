@@ -24,7 +24,9 @@
 
 #include <deque>
 #include <map>
+#include <unordered_map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -66,6 +68,11 @@ namespace eka2l1::epoc {
         // from scratch, overwriting one another.
         std::unique_ptr<atlas_packing_state> pack_state_;
 
+        // Advances the guest was given per character (see set_client_advance). Written by FBS on the kernel
+        // thread, read while drawing; they belong to the font, so destroy()/init() keep them.
+        std::unordered_map<std::uint32_t, int> client_advances_;
+        mutable std::unique_ptr<std::mutex> client_advances_lock_ = std::make_unique<std::mutex>();
+
         // Every glyph is padded on all sides, so that filtering a glyph never
         // samples the one packed next to it.
         static constexpr int GLYPH_PADDING = 5;
@@ -105,10 +112,30 @@ namespace eka2l1::epoc {
          */
         bool draw_text(const std::u16string &text, const eka2l1::rect &box, const epoc::text_alignment alignment, drivers::graphics_driver *driver,
             drivers::graphics_command_builder &builder, const eka2l1::vec2f scale_vector, bool source_over_alpha = false,
-            eka2l1::vec2 *pen_span = nullptr);
+            eka2l1::vec2 *pen_span = nullptr, const float client_advance_scale = 0.0f);
 
         int get_char_size() const {
             return size_;
         }
+
+        /**
+         * \brief Remember the advance the guest was given for a character (FBS rasterize, the font's own size).
+         *
+         * The guest lays text out with these (CFont::TextWidthInPixels, FORM's caret). A vectorizable font is
+         * rasterised again at the display scale for drawing, where hinting and rounding give other advances, so
+         * the drawn run drifts away from the laid-out one: after "hello" in a scaled TrueType font the caret sat
+         * on the "o". draw_text steps the pen by these, scaled, when asked to.
+         */
+        void set_client_advance(const std::uint32_t codepoint, const int advance);
+        bool get_client_advance(const std::uint32_t codepoint, int &advance) const;
+
+        /**
+         * \brief Pen step for one character.
+         * \param atlas_xadv     The atlas glyph's own advance, at the atlas size.
+         * \param scale_x        The scale the atlas glyph is drawn with.
+         * \param client_adv     The advance the guest was given, or nullptr if none is known.
+         * \param client_scale   Display scale to apply to client_adv; 0 = do not use it.
+         */
+        static int pen_advance(const float atlas_xadv, const float scale_x, const int *client_adv, const float client_scale);
     };
 }
