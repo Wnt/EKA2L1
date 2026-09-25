@@ -785,8 +785,43 @@ namespace eka2l1::epoc {
         msg->msg_session->set_cookie_address(session_addr);
     }
 
+    // A guest server can hold an RMessage handle past the life of the exchange: its client closed the session, or
+    // the server kept a notification it only completes when it shuts down. The slot may then be released (and still
+    // carry the old request status and owner thread) or recycled by an unrelated exchange, possibly with an HLE
+    // server. Completing it signals a request the owner is not waiting for: Series 80 Sync died with a stray signal
+    // (E32USER-CBase 46) after its AgendaServer completed a released slot last used by a MsvServer notification.
+    static bool is_stale_guest_completion(kernel_system *kern, ipc_msg_ptr msg, const std::int32_t msg_handle) {
+        if (!msg) {
+            LOG_WARN(KERNEL, "Guest completion of unknown IPC message handle {} ignored", msg_handle);
+            return true;
+        }
+
+        if (msg->ref_count == 0) {
+            LOG_WARN(KERNEL, "Guest completion of a released IPC message (id {}, function 0x{:X}) ignored", msg->id, msg->function);
+            return true;
+        }
+
+        server_ptr svr = msg->msg_session ? msg->msg_session->get_server() : nullptr;
+        if (svr) {
+            kernel::thread *owner = svr->get_owner_thread();
+            kernel::process *crr = kern->crr_process();
+
+            if (svr->is_hle() || (owner && crr && (owner->owning_process() != crr))) {
+                LOG_WARN(KERNEL, "Guest completion of IPC message id {} (function 0x{:X}) owned by server {} ignored", msg->id,
+                    msg->function, svr->name());
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     BRIDGE_FUNC(void, message_complete, std::int32_t msg_handle, std::int32_t val) {
         ipc_msg_ptr msg = kern->get_msg(msg_handle);
+
+        if (is_stale_guest_completion(kern, msg, msg_handle)) {
+            return;
+        }
 
         if (msg->request_sts) {
             epoc::request_status *status = msg->request_sts.get(msg->own_thr->owning_process());
@@ -809,6 +844,10 @@ namespace eka2l1::epoc {
 
     BRIDGE_FUNC(void, message_complete_handle, std::int32_t msg_handle, std::int32_t handle) {
         ipc_msg_ptr msg = kern->get_msg(msg_handle);
+
+        if (is_stale_guest_completion(kern, msg, msg_handle)) {
+            return;
+        }
         std::uint32_t dup_handle = kern->mirror(msg->own_thr, handle, kernel::owner_type::thread);
 
         if (dup_handle == kernel::INVALID_HANDLE) {
