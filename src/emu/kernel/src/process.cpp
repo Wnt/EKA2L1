@@ -34,6 +34,7 @@
 
 #include <mem/mmu.h>
 #include <mem/process.h>
+#include <utils/err.h>
 
 namespace eka2l1::kernel {
     std::int32_t process::refresh_generation() {
@@ -520,6 +521,11 @@ namespace eka2l1::kernel {
         }
 
         rendezvous_requests.clear();
+        rendezvous_requests_emu.complete(rendezvous_reason);
+    }
+
+    void process::rendezvous(std::function<void(int)> callback) {
+        rendezvous_requests_emu.arm(std::move(callback));
     }
 
     void process::finish_logons() {
@@ -543,6 +549,8 @@ namespace eka2l1::kernel {
 
         logon_requests.clear();
         rendezvous_requests.clear();
+
+        rendezvous_requests_emu.complete(exit_reason < 0 ? exit_reason : epoc::error_died);
 
         for (auto &req: logon_requests_emu) {
             req(this);
