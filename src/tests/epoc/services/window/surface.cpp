@@ -16,6 +16,7 @@
 #include <services/window/classes/winbase.h>
 #include <services/window/screen.h>
 #include <services/fbs/bitmap.h>
+#include <services/fbs/palette.h>
 
 #include <algorithm>
 #include <array>
@@ -673,5 +674,94 @@ TEST_CASE("A redraw of a window without background keeps what it does not paint"
             redraw(store, window, {}, false);
         }
         REQUIRE(store.get_segments().size() <= epoc::gdi_store_command_collection::LIMIT_REDRAW_SEGMENTS);
+    }
+}
+
+TEST_CASE("Bitmaps below a byte per pixel expand to grey levels or EColor16 colours", "[gdi_store]") {
+    // EGray4 (2bpp) had no conversion and no driver texture format, so it sampled nothing. Series 80
+    // draws icon masks in EGray4 (Opera's Go to address drop-down arrow and globe) with an inverted
+    // BitBltMasked: an empty mask let the whole source through, magenta key colour included.
+    epoc::bitwise_bitmap bmp{};
+    bmp.uid_ = epoc::bitwise_bitmap_uid;
+    bmp.header_.size_pixels = object_size(10, 10);
+
+    for (const std::uint32_t bpp : { 1U, 2U, 4U }) {
+        bmp.header_.bit_per_pixels = bpp;
+        bmp.settings_.current_display_mode(bpp == 1 ? epoc::display_mode::gray2 : (bpp == 2 ? epoc::display_mode::gray4 : epoc::display_mode::gray16));
+        REQUIRE(epoc::get_suitable_bpp_for_bitmap(&bmp) == 24);
+    }
+
+    bmp.header_.bit_per_pixels = 12;
+    bmp.settings_.current_display_mode(epoc::display_mode::color4k);
+    REQUIRE(epoc::get_suitable_bpp_for_bitmap(&bmp) == 12);
+
+    REQUIRE(epoc::sub_byte_bitmap_scanline_bytes(10, 2) == 4);
+    REQUIRE(epoc::sub_byte_bitmap_scanline_bytes(28, 2) == 8);
+    REQUIRE(epoc::sub_byte_bitmap_scanline_bytes(33, 1) == 8);
+
+    const auto pixel = [](const char *out, std::size_t out_stride, int x, int y) {
+        const std::uint8_t *p = reinterpret_cast<const std::uint8_t *>(out) + y * out_stride + x * 3;
+        return std::array<std::uint8_t, 3>{ p[0], p[1], p[2] };
+    };
+
+    SECTION("EGray4: the arrow mask of the Go to address field, row 3 (one scan line = 4 bytes)") {
+        // Row "0000000003": nine black pixels (the arrow) and one white (transparent when inverted).
+        // Pixel 0 sits in the low bits of byte 0; the white pixel at x = 9 is byte 2, bits 2..3.
+        const std::uint8_t rows[8] = { 0xFF, 0xFF, 0x0F, 0x00, 0x00, 0x00, 0x0C, 0x00 };
+        std::size_t raw_size = 0;
+        char *out = epoc::expand_sub_byte_bitmap_to_24bpp(rows, object_size(10, 2), 2, 4, nullptr, raw_size);
+        REQUIRE(out);
+        REQUIRE(raw_size == 32 * 2);
+        for (int x = 0; x < 10; x++) {
+            REQUIRE(pixel(out, 32, x, 0) == std::array<std::uint8_t, 3>{ 0xFF, 0xFF, 0xFF });
+            const std::uint8_t level = (x == 9) ? 0xFF : 0x00;
+            REQUIRE(pixel(out, 32, x, 1) == std::array<std::uint8_t, 3>{ level, level, level });
+        }
+        delete[] out;
+    }
+
+    SECTION("EGray4 middle levels and EGray16 with an odd width") {
+        const std::uint8_t gray4[4] = { 0xE4, 0, 0, 0 }; // 0, 1, 2, 3
+        std::size_t raw_size = 0;
+        char *out = epoc::expand_sub_byte_bitmap_to_24bpp(gray4, object_size(4, 1), 2, 0, nullptr, raw_size);
+        REQUIRE(pixel(out, 12, 0, 0)[0] == 0x00);
+        REQUIRE(pixel(out, 12, 1, 0)[0] == 0x55);
+        REQUIRE(pixel(out, 12, 2, 0)[0] == 0xAA);
+        REQUIRE(pixel(out, 12, 3, 0)[0] == 0xFF);
+        delete[] out;
+
+        const std::uint8_t gray16[4] = { 0xF0, 0x07, 0x0A, 0 }; // 0, 15, 7, 0, 10: the fifth pixel is not dropped
+        out = epoc::expand_sub_byte_bitmap_to_24bpp(gray16, object_size(5, 1), 4, 0, nullptr, raw_size);
+        REQUIRE(raw_size == 16);
+        REQUIRE(pixel(out, 16, 1, 0)[1] == 0xFF);
+        REQUIRE(pixel(out, 16, 2, 0)[1] == 0x77);
+        REQUIRE(pixel(out, 16, 4, 0)[1] == 0xAA);
+        delete[] out;
+    }
+
+    SECTION("EGray2 packs from the lowest bit") {
+        const std::uint8_t mono[4] = { 0x01, 0x80, 0, 0 };
+        std::size_t raw_size = 0;
+        char *out = epoc::expand_sub_byte_bitmap_to_24bpp(mono, object_size(16, 1), 1, 0, nullptr, raw_size);
+        REQUIRE(pixel(out, 48, 0, 0)[0] == 0xFF);
+        REQUIRE(pixel(out, 48, 1, 0)[0] == 0x00);
+        REQUIRE(pixel(out, 48, 15, 0)[0] == 0xFF);
+        delete[] out;
+    }
+
+    SECTION("EColor16 indexes its 16-entry palette, both nibbles") {
+        const std::uint8_t colour16[4] = { 0x95, 0, 0, 0 }; // index 5 (red), then 9 (blue)
+        std::size_t raw_size = 0;
+        char *out = epoc::expand_sub_byte_bitmap_to_24bpp(colour16, object_size(2, 1), 4, 0, epoc::color_16_palette.data(), raw_size);
+        REQUIRE(pixel(out, 8, 0, 0) == std::array<std::uint8_t, 3>{ 0x00, 0x00, 0xFF }); // B, G, R
+        REQUIRE(pixel(out, 8, 1, 0) == std::array<std::uint8_t, 3>{ 0xFF, 0x00, 0x00 });
+        delete[] out;
+    }
+
+    SECTION("Other depths are not expanded") {
+        const std::uint8_t byte[4] = {};
+        std::size_t raw_size = 1;
+        REQUIRE(epoc::expand_sub_byte_bitmap_to_24bpp(byte, object_size(1, 1), 8, 0, nullptr, raw_size) == nullptr);
+        REQUIRE(raw_size == 0);
     }
 }

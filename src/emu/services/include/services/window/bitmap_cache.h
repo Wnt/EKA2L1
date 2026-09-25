@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include <common/rgb.h>
 #include <common/vecx.h>
 
 #include <drivers/graphics/common.h>
@@ -45,11 +46,31 @@ namespace eka2l1::epoc {
     /**
      * @brief   Bits per pixel of the driver texture the cache uploads for a bitmap.
      *
-     * Palette, 1bpp and 4bpp bitmaps are expanded to 24bpp and extended bitmaps to 32bpp;
+     * Palette bitmaps and every depth below 8bpp (EGray2, EGray4, EGray16, EColor16) are expanded
+     * to 24bpp and extended bitmaps to 32bpp;
      * every other bitmap keeps its own depth. A 12bpp texture holds EColor4K's 0RGB pixels
      * as RGBA4444, which the driver swizzles (G, B, A, 1) back into RGB order.
      */
     std::uint32_t get_suitable_bpp_for_bitmap(epoc::bitwise_bitmap *bmp);
+
+    /**
+     * @brief   Bytes in one scan line of a bitmap below 8bpp: padded to whole 32-bit words.
+     */
+    std::uint32_t sub_byte_bitmap_scanline_bytes(const std::int32_t width, const std::uint32_t bpp);
+
+    /**
+     * @brief   Expand a 1, 2 or 4bpp bitmap to the 24bpp (B, G, R) texture layout the cache uploads.
+     *
+     * Pixels are packed from the least significant bit of each byte. Without a palette each value is a
+     * grey level (0 black, 2^bpp - 1 white); with one it indexes 0x00BBGGRR entries (EColor16).
+     *
+     * @param   stride     Source bytes per scan line; 0 takes the 32-bit padded length.
+     * @param   raw_size   Receives the size of the returned buffer.
+     *
+     * @returns A new[] buffer of rows padded to 4 bytes, or nullptr for another depth.
+     */
+    char *expand_sub_byte_bitmap_to_24bpp(const std::uint8_t *data, const eka2l1::object_size &size, const std::uint32_t bpp,
+        std::uint32_t stride, const common::rgba *palette, std::size_t &raw_size);
 
     class bitmap_cache {
     public:
