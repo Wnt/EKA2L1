@@ -1237,6 +1237,20 @@ namespace eka2l1::epoc {
             flushed = false;
         }
 
+        // Diagnostic (env EKA2L1_GC_TRACE): every GC command with its window and first data words, to follow
+        // state a draw depends on (pen/brush colour, draw mode, brush style) into the draw itself.
+        static const bool gc_trace = std::getenv("EKA2L1_GC_TRACE") != nullptr;
+        if (gc_trace) {
+            const std::uint32_t *w = reinterpret_cast<const std::uint32_t *>(cmd.data_ptr);
+            const std::size_t words = cmd.data_ptr ? std::min<std::size_t>(cmd.header.cmd_len / 4, 5) : 0;
+            std::uint32_t v[5] = { 0, 0, 0, 0, 0 };
+            for (std::size_t i = 0; i < words; i++) {
+                v[i] = w[i];
+            }
+            LOG_WARN(SERVICE_WINDOW, "GCTRACE win 0x{:X} op {} len {} data {:X} {:X} {:X} {:X} {:X}", attached_window ? attached_window->id : 0,
+                op, cmd.header.cmd_len, v[0], v[1], v[2], v[3], v[4]);
+        }
+
         handler(this, ctx, cmd);
         return need_quit;
     }
