@@ -19,6 +19,7 @@
 
 #include <common/buffer.h>
 #include <services/fbs/bitmap.h>
+#include <services/fbs/fbs.h>
 
 #include <catch2/catch.hpp>
 
@@ -230,4 +231,30 @@ TEST_CASE("bitmap_header_colour_field_round_trips_the_display_mode", "bitmap_hea
     REQUIRE(epoc::get_bitmap_color_from_display_mode(epoc::display_mode::color256) == epoc::color_bitmap);
     REQUIRE(epoc::get_bitmap_color_from_display_mode(epoc::display_mode::color16ma) == epoc::color_bitmap_with_alpha);
     REQUIRE(epoc::get_bitmap_color_from_display_mode(epoc::display_mode::color16map) == epoc::color_bitmap_with_alpha_pm);
+}
+
+TEST_CASE("bitmap_shared_header_compression_matches_the_client_abi", "bitmap_header") {
+    // The 9300 FBSCLI decoder at 0x502d7860 dispatches values 1, 2, 3, 4;
+    // 51/52 return KErrNotSupported. Older S60 clients retain the +50 ABI.
+    const int level = GENERATE(FBS_LEGACY_LEVEL_S60V1,
+        FBS_LEGACY_LEVEL_EARLY_KERNEL_TRANSITION, FBS_LEGACY_LEVEL_KERNEL_TRANSITION);
+    const auto compression = GENERATE(epoc::bitmap_file_no_compression,
+        epoc::bitmap_file_byte_rle_compression, epoc::bitmap_file_twelve_bit_rle_compression,
+        epoc::bitmap_file_sixteen_bit_rle_compression);
+    epoc::bitwise_bitmap bitmap{};
+    loader::sbm_header header{};
+    header.size_pixels = eka2l1::vec2(64, 50);
+    header.bit_per_pixels = 8;
+    header.color = epoc::color_bitmap;
+    header.compression = compression;
+    bitmap.construct(header, epoc::display_mode::color256, nullptr, nullptr, false, false);
+    bitmap.post_construct(level);
+
+    const bool old_rle = level == FBS_LEGACY_LEVEL_S60V1
+        && (compression == epoc::bitmap_file_byte_rle_compression
+            || compression == epoc::bitmap_file_twelve_bit_rle_compression);
+    REQUIRE(bitmap.header_.compression == static_cast<unsigned>(compression) + (old_rle ? 50 : 0));
+    REQUIRE(bitmap.compression_type() == compression);
+    REQUIRE(bitmap.compressed_in_ram_ == (compression != epoc::bitmap_file_no_compression));
+    REQUIRE(bitmap.current_display_mode() == epoc::display_mode::color256);
 }

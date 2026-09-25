@@ -210,16 +210,18 @@ namespace eka2l1 {
             }
         }
 
-        void bitwise_bitmap::post_construct(fbs_server *serv) {
-            if (serv->legacy_level() >= FBS_LEGACY_LEVEL_EARLY_KERNEL_TRANSITION) {
+        void bitwise_bitmap::post_construct(const int legacy_level) {
+            // The 7.0s ROM scanline decoder accepts the file compression enum
+            // (1..4). Only older clients use the +50 in-memory RLE values.
+            if (legacy_level >= FBS_LEGACY_LEVEL_S60V1) {
                 if ((header_.compression == epoc::bitmap_file_byte_rle_compression) || (header_.compression == epoc::bitmap_file_twelve_bit_rle_compression))
                     header_.compression += epoc::LEGACY_BMP_COMPRESS_IN_MEMORY_TYPE_BASE;
             }
 
             // Set large bitmap flag so that the data pointer base is in large chunk
-            if (serv->legacy_level() == FBS_LEGACY_LEVEL_EARLY_EKA2) {
+            if (legacy_level == FBS_LEGACY_LEVEL_EARLY_EKA2) {
                 settings_.set_large(offset_from_me_ ? false : true);
-            } else if (serv->legacy_level() == FBS_LEGACY_LEVEL_SYMBIAN_92) {
+            } else if (legacy_level == FBS_LEGACY_LEVEL_SYMBIAN_92) {
                 if (header_.compression == 0) {
                     settings_.set_large(true);
                 } else {
@@ -230,7 +232,7 @@ namespace eka2l1 {
                 compressed_in_ram_ = (header_.compression != epoc::bitmap_file_no_compression);
             }
 
-            if (serv->legacy_level() == FBS_LEGACY_LEVEL_KERNEL_TRANSITION) {
+            if (legacy_level == FBS_LEGACY_LEVEL_KERNEL_TRANSITION) {
                 settings_.set_width(static_cast<std::uint16_t>(header_.size_pixels.x));
             }
         }
@@ -757,7 +759,7 @@ namespace eka2l1 {
             bws_bmp->header_.bitmap_size = static_cast<std::uint32_t>(bws_bmp->header_.header_len + size_when_decomp);
 
             bws_bmp->header_.compression = epoc::bitmap_file_no_compression;
-            bws_bmp->post_construct(fbss);
+            bws_bmp->post_construct(fbss->legacy_level());
 
             bmp = make_new<fbsbitmap>(fbss, bws_bmp, static_cast<bool>(load_options->share), support_dirty_bitmap);
         }
@@ -1020,7 +1022,7 @@ namespace eka2l1 {
 
         bws_bmp->construct(header, info.dpm_, data, base, support_current_display_mode_flag, true);
         bws_bmp->offset_from_me_ = smol;
-        bws_bmp->post_construct(this);
+        bws_bmp->post_construct(legacy_level());
 
         if (info.data_) {
             std::memcpy(data, info.data_, common::min<std::size_t>(info.data_size_, original_bytes));
@@ -1371,7 +1373,7 @@ namespace eka2l1 {
             new_bmp->reserved_height_each_side_ = reserved_each_size;
             new_bmp->bitmap_->construct(old_header, new_bmp->bitmap_->settings_.initial_display_mode(),
                 dest_data, base, support_current_display_mode, false);
-            new_bmp->bitmap_->post_construct(fbss);
+            new_bmp->bitmap_->post_construct(fbss->legacy_level());
         }
 
         new_bmp->bitmap_->offset_from_me_ = offset_from_me_now;

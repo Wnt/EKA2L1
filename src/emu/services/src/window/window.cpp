@@ -3047,7 +3047,12 @@ namespace eka2l1 {
 
         for (const auto &[scancode, bit] : TYPED_MODIFIERS) {
             auto holders = host_modifier_keys_.find(scancode);
-            const bool want = (holders != host_modifier_keys_.end()) && (holders->second > 0);
+            // ROM Eikon treats a bare Shift down/up as sticky Shift. Desktop
+            // punctuation may need no Shift on the device (Nordic '+'), so do
+            // not restore a desktop Shift after a character's synthetic chord.
+            const bool defer_shift = kern->rom_raw_input_enabled()
+                && (scancode == epoc::std_key_left_shift || scancode == epoc::std_key_right_shift);
+            const bool want = !defer_shift && (holders != host_modifier_keys_.end()) && (holders->second > 0);
             const bool have = (key_translator_->modifier_state() & bit) != 0;
 
             if (want != have) {
@@ -3124,7 +3129,9 @@ namespace eka2l1 {
                 // on the device only if it is not down already.
                 host_modifier_keys_[scancode]++;
 
-                if (!(key_translator_->modifier_state() & bit)) {
+                const bool defer_shift = kern->rom_raw_input_enabled() && !raw_input
+                    && (scancode == epoc::std_key_left_shift || scancode == epoc::std_key_right_shift);
+                if (!defer_shift && !(key_translator_->modifier_state() & bit)) {
                     ship_raw_translated_key(scancode, false, 0);
                 }
 
@@ -3206,12 +3213,24 @@ namespace eka2l1 {
         }
 
         if (mapped) {
+            // Non-character keys (Shift+arrows, Ctrl+Shift shortcuts) need the
+            // physical modifier intent. Printable keys above use their ROM
+            // layout chord instead, without an unrelated desktop Shift tap.
+            if (kern->rom_raw_input_enabled()) {
+                for (const auto scan : { epoc::std_key_left_shift, epoc::std_key_right_shift }) {
+                    const auto holder = host_modifier_keys_.find(scan);
+                    if (holder != host_modifier_keys_.end() && holder->second > 0
+                        && !(key_translator_->modifier_state() & epoc::modifier_bit_of_scancode(scan))) {
+                        ship_raw_translated_key(scan, false, 0);
+                    }
+                }
+            }
             const std::uint32_t scancode = mapped.value() & epoc::BIND_TARGET_SCANCODE_MASK;
             const std::uint32_t forced = mapped.value() >> epoc::BIND_TARGET_MODIFIER_SHIFT;
 
             if (forced) {
                 // A desktop key that is a combination on the device (Home = Chr+joystick left).
-                press_typed(scancode, held_modifiers | forced);
+                press_typed(scancode, key_translator_->modifier_state() | forced);
                 return true;
             }
 
