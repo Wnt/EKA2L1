@@ -3530,7 +3530,14 @@ namespace eka2l1::epoc {
     }
 
     BRIDGE_FUNC(std::int32_t, user_svr_hal_get, const std::uint32_t function, void *param) {
-        return do_hal_by_data_num(kern->get_system(), function, param);
+        const std::int32_t result = do_hal_by_data_num(kern->get_system(), function, param);
+
+        if ((result < 0) && kern->get_config()->log_ipc) {
+            kernel::thread *crr_thread = kern->crr_thread();
+            LOG_INFO(KERNEL, "HAL get {} returned {} for {}", function, result, crr_thread ? crr_thread->name() : std::string("?"));
+        }
+
+        return result;
     }
 
     BRIDGE_FUNC(void, user_svr_screen_info, epoc::des8 *the_des) {
@@ -4895,7 +4902,7 @@ namespace eka2l1::epoc {
         return do_handle_write(kern, create_info, finish_signal, target_thread, h);
     }
 
-    BRIDGE_FUNC(std::int32_t, the_executor_eka1, const std::uint32_t attribute, epoc::eka1_executor *create_info,
+    static std::int32_t the_executor_eka1_impl(kernel_system *kern, const std::uint32_t attribute, epoc::eka1_executor *create_info,
         epoc::request_status *finish_signal) {
         kernel::thread *crr_thread = kern->crr_thread();
 
@@ -5410,6 +5417,21 @@ namespace eka2l1::epoc {
         return epoc::error_general;
     }
 
+    BRIDGE_FUNC(std::int32_t, the_executor_eka1, const std::uint32_t attribute, epoc::eka1_executor *create_info,
+        epoc::request_status *finish_signal) {
+        const std::int32_t result = the_executor_eka1_impl(kern, attribute, create_info, finish_signal);
+
+        // With IPC logging on, name every executor request the kernel refuses: a guest that
+        // leaves on the error is otherwise silent about which object it could not create.
+        if ((result < 0) && kern->get_config()->log_ipc) {
+            kernel::thread *crr_thread = kern->crr_thread();
+            LOG_INFO(KERNEL, "Executor function 0x{:X} returned {} for {}", attribute & 0xFF, result,
+                crr_thread ? crr_thread->name() : std::string("?"));
+        }
+
+        return result;
+    }
+
     BRIDGE_FUNC(void, heap_created, std::uint32_t max_size, const std::uint32_t used_size, const std::uint32_t addr) {
         LOG_TRACE(KERNEL, "New heap created at address = 0x{:X}, allocated size = 0x{:X}, max size = 0x{:X}", addr, used_size, max_size);
     }
@@ -5535,6 +5557,12 @@ namespace eka2l1::epoc {
         if (!sts) {
             LOG_ERROR(KERNEL, "Status for request complete is null!");
             return;
+        }
+
+        if ((code != 0) && kern->get_config()->log_ipc) {
+            kernel::thread *completer = kern->crr_thread();
+            LOG_INFO(KERNEL, "RequestComplete {} for {} at 0x{:X} by {}", code, thr->name(), *sts_addr,
+                completer ? completer->name() : std::string("?"));
         }
 
         sts->set(code, true);

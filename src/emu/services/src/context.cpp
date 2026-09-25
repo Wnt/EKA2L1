@@ -142,6 +142,14 @@ namespace eka2l1 {
         void ipc_context::complete(int res) {
             if (msg->request_sts) {
                 kernel_system *kern = sys->get_kernel_system();
+
+                // With IPC logging on, name every request an HLE server answers with an error:
+                // the kernel logs LLE completions, but not these, and a guest that leaves on a
+                // KErrNotSupported it got from an HLE server is otherwise silent about the source.
+                if ((res < 0) && kern->get_config()->log_ipc && msg->msg_session && msg->msg_session->get_server()) {
+                    LOG_INFO(SERVICE_TRACK, "HLE {} completed function {} with {} for {}", msg->msg_session->get_server()->name(),
+                        msg->function, res, msg->own_thr ? msg->own_thr->name() : std::string("?"));
+                }
                 (msg->request_sts.get(msg->own_thr->owning_process()))->set(res, kern->is_eka1());
 
                 // Avoid signal twice to cause undefined behavior
