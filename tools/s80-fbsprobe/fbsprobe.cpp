@@ -51,7 +51,11 @@ LOCAL_C void RunL() {
     ws.Flush(); // Let Wserv initialize its screen before the direct-screen probe.
     CFbsScreenDevice* screen = CFbsScreenDevice::NewL(_L(""), EColor64K);
     CFbsTypefaceStore* store = CFbsTypefaceStore::NewL(screen);
-    RDebug::Print(_L("FBSPROBE font store default bitmap=%d"), store->DefaultBitmapType());
+    const TGlyphBitmapType defaultBitmapType = store->DefaultBitmapType();
+    RDebug::Print(_L("FBSPROBE font store default bitmap=%d"), defaultBitmapType);
+    if (defaultBitmapType != EMonochromeGlyphBitmap && defaultBitmapType != EAntiAliasedGlyphBitmap)
+        User::Leave(KErrCorrupt);
+    RDebug::Print(_L("FBSPROBE default bitmap enum contract PASS"));
     delete store;
     CFbsBitmap canvas;
     User::LeaveIfError(canvas.Create(TSize(640,200), EColor64K));

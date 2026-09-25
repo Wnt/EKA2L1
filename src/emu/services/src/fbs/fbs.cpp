@@ -351,7 +351,8 @@ namespace eka2l1 {
         , large_chunk(nullptr)
         , fntstr_seg(nullptr)
         , bmp_font_vtab(0)
-        , session_cache_list(nullptr) {
+        , session_cache_list(nullptr)
+        , default_glyph_bitmap_type(epoc::antialised_glyph_bitmap) {
     }
 
     static void compressor_thread_func(compress_queue *queue) {
