@@ -593,3 +593,85 @@ TEST_CASE("A masked blit with a brush fills the blitted part of the source", "[g
     // An empty source rectangle blits the whole bitmap.
     REQUIRE(epoc::masked_blit_brush_area({ 2, 3 }, rect({ 0, 0 }, { 0, 0 }), { 13, 11 }) == rect({ 2, 3 }, { 13, 11 }));
 }
+
+namespace {
+    epoc::gdi_store_command opaque_fill(const rect &area, const int alpha = 255) {
+        epoc::gdi_store_command command;
+        command.opcode_ = epoc::gdi_store_command_draw_rect;
+        auto &data = command.get_data_struct<epoc::gdi_store_command_draw_rect_data>();
+        data.rect_ = area;
+        data.color_ = { 255, 255, 255, alpha };
+        return command;
+    }
+
+    epoc::gdi_store_command_segment *redraw(epoc::gdi_store_command_collection &store, const rect &area,
+        std::initializer_list<epoc::gdi_store_command> commands, const bool background_clears) {
+        auto *segment = store.add_new_segment(area, epoc::gdi_store_command_segment_pending_redraw);
+        for (auto command : commands) {
+            segment->add_command(command);
+        }
+        store.promote_last_segment(background_clears);
+        return segment;
+    }
+}
+
+TEST_CASE("A redraw of a window without background keeps what it does not paint", "[gdi_store]") {
+    // Series 80 Contacts: the card pane first paints itself white, later partial redraws of the same
+    // (SetNoBackgroundColor) window leave a band unpainted. On the device the old pixels stay; dropping
+    // the older segment made the band black at the next recomposition.
+    const rect window({ 0, 0 }, { 100, 100 });
+
+    SECTION("with a background colour the redraw replaces everything under it") {
+        epoc::gdi_store_command_collection store;
+        redraw(store, window, { opaque_fill(window) }, true);
+        redraw(store, window, { opaque_fill(rect({ 0, 0 }, { 100, 50 })) }, true);
+        REQUIRE(store.get_segments().size() == 1);
+    }
+
+    SECTION("without one the older segment stays under the unpainted part") {
+        epoc::gdi_store_command_collection store;
+        auto *first = redraw(store, window, { opaque_fill(window) }, false);
+        redraw(store, window, { opaque_fill(rect({ 0, 0 }, { 100, 50 })) }, false);
+        REQUIRE(store.get_segments().size() == 2);
+        REQUIRE(store.get_segments()[0].get() == first);
+
+        // A later redraw that paints it all over replaces both.
+        redraw(store, window, { opaque_fill(window) }, false);
+        REQUIRE(store.get_segments().size() == 1);
+    }
+
+    SECTION("translucent fills and inverting draws do not cover") {
+        epoc::gdi_store_command_collection store;
+        redraw(store, window, { opaque_fill(window) }, false);
+
+        epoc::gdi_store_command invert;
+        invert.opcode_ = epoc::gdi_store_command_set_draw_mode;
+        invert.get_data_struct<epoc::gdi_store_command_set_draw_mode_data>().mode_ = epoc::gdi_draw_mode_notscreen;
+
+        redraw(store, window, { opaque_fill(window, 128), invert, opaque_fill(window) }, false);
+        REQUIRE(store.get_segments().size() == 2);
+    }
+
+    SECTION("a fill clipped to part of the window covers only that part") {
+        epoc::gdi_store_command clip;
+        clip.opcode_ = epoc::gdi_store_command_set_clip_rect_single;
+        clip.get_data_struct<epoc::gdi_store_command_set_clip_rect_single_data>().clipping_rect_ = rect({ 0, 0 }, { 10, 10 });
+
+        epoc::gdi_store_command_segment segment;
+        segment.add_command(clip);
+        auto fill = opaque_fill(window);
+        segment.add_command(fill);
+
+        const common::region covered = epoc::gdi_store_segment_opaque_coverage(segment);
+        REQUIRE(covered.rects_.size() == 1);
+        REQUIRE(covered.rects_[0] == rect({ 0, 0 }, { 10, 10 }));
+    }
+
+    SECTION("segments kept under redraws stay bounded") {
+        epoc::gdi_store_command_collection store;
+        for (int i = 0; i < 100; i++) {
+            redraw(store, window, {}, false);
+        }
+        REQUIRE(store.get_segments().size() <= epoc::gdi_store_command_collection::LIMIT_REDRAW_SEGMENTS);
+    }
+}

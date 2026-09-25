@@ -1412,7 +1412,7 @@ namespace eka2l1::epoc {
 
     void redraw_msg_canvas::end_redraw(service::ipc_context &ctx, ws_cmd &cmd) {
         redraw_rect_curr.make_empty();
-        redraw_segments_.promote_last_segment();
+        redraw_segments_.promote_last_segment(clear_color_enable);
         if (seg_trace_enabled()) {
             LOG_WARN(SERVICE_WINDOW, "SEGTRACE win 0x{:X} end_redraw segs={}", id, redraw_segments_.get_segments().size());
         }
