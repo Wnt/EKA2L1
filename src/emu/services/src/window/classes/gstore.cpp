@@ -404,6 +404,12 @@ namespace eka2l1::epoc {
             mask_bitmap_drv = bcache_.add_or_get(driver_, mask_bitmap_bw, &builder_);
         }
 
+        if (mask_bitmap_bw && !mask_bitmap_drv) {
+            // Same for a refused mask: drawn without it the source's key colour shows, and the
+            // mask swizzle below would be sent to texture 0, which takes the renderer down too.
+            return;
+        }
+
         eka2l1::rect scaled_dest_rect = cmd.dest_rect_;
         scaled_dest_rect.top += position_;
 
