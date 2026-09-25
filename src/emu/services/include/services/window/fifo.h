@@ -31,6 +31,7 @@
 #include <array>
 #include <cstdint>
 #include <mutex>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -220,5 +221,21 @@ namespace eka2l1::epoc {
 
         std::uint32_t queue_event(void *owner, const redraw_event &evt, const std::uint16_t pri);
         void remove_events(void *owner);
+
+        /*! \brief Get the first queued redraw that the owner can still see.
+         *
+         * Redraws for which \p hidden returns true are taken off the queue and dropped. WSERV reports only
+         * the part of an invalid region that is not covered, so a window whose children cover it never
+         * gets a redraw. Returns nullopt if no visible redraw is left.
+         */
+        std::optional<redraw_event_full> get_visible_evt_opt(const std::function<bool(const redraw_event_full &)> &hidden);
     };
+
+    /*! \brief Check if a redraw rectangle is completely covered by opaque rectangles.
+     *
+     * \param evt            The redraw event. Its rectangle is relative to the window.
+     * \param window_abs_top The window's top-left corner in screen coordinates.
+     * \param covers         Screen rectangles of the visible, opaque children of the window.
+     */
+    bool redraw_covered_by(const redraw_event &evt, const eka2l1::vec2 &window_abs_top, const std::vector<eka2l1::rect> &covers);
 }

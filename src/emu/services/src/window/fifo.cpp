@@ -23,6 +23,7 @@
 
 #include <common/log.h>
 #include <services/window/fifo.h>
+#include <common/region.h>
 
 
 namespace eka2l1::epoc {
@@ -173,6 +174,43 @@ namespace eka2l1::epoc {
 
         // Queue a redraw won't directly trigger a notification.
         return id;
+    }
+
+    std::optional<redraw_event_full> redraw_fifo::get_visible_evt_opt(const std::function<bool(const redraw_event_full &)> &hidden) {
+        const std::lock_guard<std::mutex> guard(lock_);
+        while (!q_.empty()) {
+            redraw_event_full evt = q_.front().evt;
+            q_.erase(q_.begin());
+
+            if (!hidden || !hidden(evt)) {
+                return evt;
+            }
+        }
+
+        return std::nullopt;
+    }
+
+    bool redraw_covered_by(const redraw_event &evt, const eka2l1::vec2 &window_abs_top, const std::vector<eka2l1::rect> &covers) {
+        eka2l1::rect target(evt.top_left, evt.bottom_right);
+        target.transform_from_symbian_rectangle();
+
+        if ((target.size.x <= 0) || (target.size.y <= 0) || covers.empty()) {
+            return false;
+        }
+
+        target.top += window_abs_top;
+
+        common::region left;
+        left.add_rect(target);
+
+        for (const eka2l1::rect &cover : covers) {
+            left.eliminate(cover);
+            if (left.empty()) {
+                return true;
+            }
+        }
+
+        return left.empty();
     }
 
     void redraw_fifo::remove_events(void *owner) {
