@@ -24,7 +24,6 @@
 #include <common/log.h>
 #include <services/window/fifo.h>
 
-#include <cassert>
 
 namespace eka2l1::epoc {
     bool event_fifo::is_my_priority_really_high(epoc::event_code evt) {
@@ -42,8 +41,15 @@ namespace eka2l1::epoc {
     std::uint32_t event_fifo::queue_event(const event &evt) {
         const std::lock_guard<std::mutex> guard(lock_);
 
-        if (q_.size() == maximum_element) {
-            do_purge();
+        if ((q_.size() >= maximum_element) && !do_purge()) {
+            // Nothing in the queue may be thrown away: keys (and pointer presses) are what the user did,
+            // and losing one mid-word loses a character or, worse, a Shift release. The queue grows past
+            // its nominal size instead, up to a hard cap that only an app that stopped reading reaches.
+            if (q_.size() >= hard_maximum_element) {
+                LOG_ERROR(SERVICE_WINDOW, "Event queue of {} events is full and nothing can be purged; event type {} dropped",
+                    q_.size(), static_cast<int>(evt.type));
+                return static_cast<std::uint32_t>(q_.size());
+            }
         }
 
         if ((evt.type == epoc::event_code::touch) && ((evt.adv_pointer_evt_.evtype == epoc::event_type::drag) ||
@@ -66,62 +72,61 @@ namespace eka2l1::epoc {
         return result;
     }
 
-    // Symbian purges:
-    // Pointer up/down pairs
-    // Key messages
-    // Key updown pairs
-    //
-    // Focus lost/gain pair
-    // Not purge
-    // Lone pointer ups
-    // Lone focus lost/gain
-    void event_fifo::do_purge() {
-        for (size_t i = 0; i < q_.size(); i++) {
-            switch (q_[i].evt.type) {
-            case epoc::event_code::event_password:
-                break;
-
-            case epoc::event_code::null:
-            case epoc::event_code::key:
-            case epoc::event_code::touch_enter:
-            case epoc::event_code::touch_exit: {
-                q_.erase(q_.begin() + i);
-                break;
-            }
-
-            case epoc::event_code::touch: {
-                // TODO: implement logics in
-                // https://github.com/SymbianSource/oss.FCL.sf.os.graphics/blob/ff133bc50e6158bfb08cc093b0f0055321dcde99/windowing/windowserver/nga/SERVER/EVQUEUE.CPP#L630
-                // just purge it right now
-                q_.erase(q_.begin() + i);
-                break;
-            }
-
-            case epoc::event_code::focus_gained:
-            case epoc::event_code::focus_lost: {
-                if ((i + 1 < q_.size()) && ((q_[i + 1].evt.type == epoc::event_code::focus_gained) || (q_[i + 1].evt.type == epoc::event_code::focus_lost))) {
-                    q_.erase(q_.begin() + i + 1);
+    // What may go when the queue is full, one event at a time and cheapest first (after the window
+    // server's EVQUEUE.CPP purge order, minus the input the user produced):
+    //   null events; pointer moves and drags (the next one supersedes them); pointer enter/exit;
+    //   a focus lost/gained pair; a repeated switch-on.
+    // Never purged: key, key-up and key-down events (dropping one loses a character, or leaves a
+    // modifier held for the app), pointer presses and releases, and anything not listed above.
+    bool event_fifo::do_purge() {
+        auto erase_first = [this](auto pred) -> bool {
+            for (std::size_t i = 0; i < q_.size(); i++) {
+                if (pred(i)) {
                     q_.erase(q_.begin() + i);
-                }
-
-                break;
-            }
-
-            case epoc::event_code::switch_on: {
-                if (i + 1 < q_.size() && (q_[i + 1].evt.type == epoc::event_code::switch_on)) {
-                    q_.erase(q_.begin() + i);
-                    break;
+                    return true;
                 }
             }
 
-            default: {
-                LOG_ERROR(SERVICE_WINDOW, "Unhandled purge of event type: {}", static_cast<int>(q_[i].evt.type));
-                assert(false);
+            return false;
+        };
 
-                break;
-            }
+        if (erase_first([this](std::size_t i) { return q_[i].evt.type == epoc::event_code::null; })) {
+            return true;
+        }
+
+        if (erase_first([this](std::size_t i) {
+                const epoc::event &e = q_[i].evt;
+                return (e.type == epoc::event_code::touch) && ((e.adv_pointer_evt_.evtype == epoc::event_type::drag) ||
+                    (e.adv_pointer_evt_.evtype == epoc::event_type::move));
+            })) {
+            return true;
+        }
+
+        if (erase_first([this](std::size_t i) {
+                return (q_[i].evt.type == epoc::event_code::touch_enter) || (q_[i].evt.type == epoc::event_code::touch_exit);
+            })) {
+            return true;
+        }
+
+        auto is_focus = [](const epoc::event &e) {
+            return (e.type == epoc::event_code::focus_gained) || (e.type == epoc::event_code::focus_lost);
+        };
+
+        for (std::size_t i = 0; i + 1 < q_.size(); i++) {
+            if (is_focus(q_[i].evt) && is_focus(q_[i + 1].evt)) {
+                q_.erase(q_.begin() + i, q_.begin() + i + 2);
+                return true;
             }
         }
+
+        for (std::size_t i = 0; i + 1 < q_.size(); i++) {
+            if ((q_[i].evt.type == epoc::event_code::switch_on) && (q_[i + 1].evt.type == epoc::event_code::switch_on)) {
+                q_.erase(q_.begin() + i);
+                return true;
+            }
+        }
+
+        return false;
     }
 
     event event_fifo::get_event() {
