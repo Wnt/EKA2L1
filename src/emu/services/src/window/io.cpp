@@ -213,6 +213,23 @@ namespace eka2l1::epoc {
             raw_target->queue_event(evt);
             kern->unlock();
 
+            auto cancel_repeat = [&](const std::uint64_t data) {
+                kern->lock();
+
+                if (!timing->unschedule_event(serv_->repeatable_event_, data)) {
+                    serv_->cancel_repeatable_list.insert(data);
+                }
+
+                kern->unlock();
+            };
+
+            if (translated && (evt.type == epoc::event_code::key_down) && serv_->active_repeat_) {
+                // One key repeats at a time, as with the window server's keyboard repeat: any key going
+                // down ends the repeat of the key before it.
+                cancel_repeat(serv_->active_repeat_.value());
+                serv_->active_repeat_.reset();
+            }
+
             if (!dont_send_extra_key_event) {
                 // Give it a single key event also
                 kern->lock();
@@ -222,12 +239,21 @@ namespace eka2l1::epoc {
                 if ((evt.type == epoc::event_code::key_down) && repeatable) {
                     serv_->repeat_modifiers_ = extra_event.key_evt_.modifiers | event_modifier_repeatable;
                     timing->schedule_event(serv_->initial_repeat_delay_, serv_->repeatable_event_, data_for_repeatable);
+
+                    if (translated) {
+                        serv_->active_repeat_ = data_for_repeatable;
+                    }
                 }
             }
 
-            if (translated && (evt.type == epoc::event_code::key_up)) {
-                // Auto-repeat of a translated key belongs to its key-down, whatever this release produced.
-                repeatable = (translated->repeat_code != 0);
+            if (translated) {
+                // A release ends the repeat only if its key is the one repeating.
+                if ((evt.type == epoc::event_code::key_up) && serv_->active_repeat_ && (serv_->active_repeat_.value() == data_for_repeatable)) {
+                    cancel_repeat(data_for_repeatable);
+                    serv_->active_repeat_.reset();
+                }
+
+                repeatable = false;
             }
 
             if ((evt.type == epoc::event_code::key_up) && repeatable) {

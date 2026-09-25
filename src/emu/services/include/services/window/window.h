@@ -419,6 +419,7 @@ namespace eka2l1 {
         int repeatable_event_;
         int deliver_report_visibility_evt_;
         std::uint32_t repeat_modifiers_; ///< Modifiers carried by the key event that is auto-repeating.
+        std::optional<std::uint64_t> active_repeat_; ///< The translated key repeating now (scan code | code << 32).
 
         std::set<std::uint64_t> cancel_repeatable_list;
 
