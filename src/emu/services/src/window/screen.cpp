@@ -22,6 +22,7 @@
 #include <services/window/classes/winbase.h>
 #include <services/window/classes/wingroup.h>
 #include <services/window/classes/winuser.h>
+#include <services/window/fifo.h>
 #include <services/window/screen.h>
 #include <services/window/window.h>
 
@@ -1139,6 +1140,23 @@ namespace eka2l1::epoc {
             , trigger_redraw_(trigger_redraw) {
         }
 
+        // WSERV sends a redraw for the part of a window that another window stopped covering
+        // (a window server without redraw storing has no other way to fill it). Our redraw store replays what
+        // the window drew, but a client may never have drawn a covered part: the Series 80 menu bar leaves out
+        // the title its highlight window covers, so moving the highlight from File to Edit left File blank.
+        // Only a window that was partly visible at the same size is handled here: a window that just became
+        // visible, moved or was resized is invalidated by its own activation, visibility or extent change.
+        static void invalidate_uncovered(epoc::canvas_base *winuser, const common::region &previous_region, const eka2l1::rect &previous_extent) {
+            if (winuser->win_type != epoc::window_type::redraw) {
+                return;
+            }
+
+            epoc::redraw_msg_canvas *redraw_win = reinterpret_cast<epoc::redraw_msg_canvas *>(winuser);
+            for (const eka2l1::rect &exposed : epoc::uncovered_window_rects(previous_region, previous_extent, winuser->visible_region, winuser->abs_rect)) {
+                redraw_win->invalidate(exposed);
+            }
+        }
+
         bool do_it(epoc::window *win) override {
             // The Series 80 status pane: an opaque layer right behind its anchor group. The walk visits a
             // group after all of its windows, so what is left here is what the pane can show, and nothing
@@ -1186,7 +1204,12 @@ namespace eka2l1::epoc {
                     }
                 }
 
+                const eka2l1::rect previous_extent = winuser->visible_region_extent;
+                winuser->visible_region_extent = winuser->abs_rect;
+
                 if (!previous_region.identical(winuser->visible_region)) {
+                    invalidate_uncovered(winuser, previous_region, previous_extent);
+
                     if (winuser->is_dsa_active()) {
                         std::vector<dsa*> dsa_residents = winuser->directs_;
 

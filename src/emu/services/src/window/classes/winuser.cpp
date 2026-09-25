@@ -1532,19 +1532,17 @@ namespace eka2l1::epoc {
 
             // Not in redraw? Try to cleanup non redraw segments to make ways
             const std::size_t segment_count_before = redraw_segments_.get_segments().size();
-            if (redraw_segments_.clean_old_nonredraw_segments()) {
+            // Without redraw storing the client never expects to redraw what it drew outside a redraw, so
+            // an aged segment is kept (still replayed) until the redraw asked for here replaces it.
+            if (redraw_segments_.clean_old_nonredraw_segments(client->get_ws().no_redraw_storing_enabled())) {
                 if (seg_trace_enabled()) {
                     LOG_WARN(SERVICE_WINDOW, "SEGTRACE win 0x{:X} clean_old_nonredraw {} -> {} segs", id, segment_count_before, redraw_segments_.get_segments().size());
                 }
                 // Dropping a segment loses its pixels on the next recomposite, so the client has to paint them
-                // again. Without redraw storing (Symbian OS 7.0s and older) that is only needed when a segment
-                // really went: WSERV would still hold those pixels on the screen. Not asking for the redraw
-                // there lost them silently, and in the logical draw modes it did worse: Series 80 Sheet's
-                // cell cursor draw aged out while its later NOTSCREEN erase stayed, which painted a ghost frame.
-                if (!client->get_ws().no_redraw_storing_enabled()
-                    || (redraw_segments_.get_segments().size() < segment_count_before)) {
-                    invalidate(full_size_rect);
-                }
+                // again (G2: Series 80 Sheet's cell cursor draw aged out while its later NOTSCREEN erase stayed and
+                // painted a ghost frame). Without redraw storing the aged segment is kept and replayed until that
+                // redraw replaces it, so nothing is lost meanwhile (clean_old_nonredraw_segments).
+                invalidate(full_size_rect);
             }
 
             gdi_store_command_segment *current_segment = redraw_segments_.get_current_segment();

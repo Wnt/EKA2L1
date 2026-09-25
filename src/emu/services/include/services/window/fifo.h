@@ -24,6 +24,7 @@
 #pragma once
 
 #include <services/window/common.h>
+#include <common/region.h>
 #include <utils/reqsts.h>
 #include <utils/err.h>
 
@@ -238,4 +239,18 @@ namespace eka2l1::epoc {
      * \param covers         Screen rectangles of the visible, opaque children of the window.
      */
     bool redraw_covered_by(const redraw_event &evt, const eka2l1::vec2 &window_abs_top, const std::vector<eka2l1::rect> &covers);
+
+    /*! \brief The part of a window that another window stopped covering, to be redrawn.
+     *
+     * Only for a window that was partly visible before and stayed at the same place and size: a window that
+     * appeared, moved or was resized is invalidated by that change itself.
+     *
+     * \param previous_visible Screen region the window was visible in before.
+     * \param previous_extent  The window's screen rectangle when previous_visible was worked out.
+     * \param visible          Screen region the window is visible in now.
+     * \param extent           The window's screen rectangle now.
+     * \returns Rectangles relative to the window.
+     */
+    std::vector<eka2l1::rect> uncovered_window_rects(const common::region &previous_visible, const eka2l1::rect &previous_extent,
+        const common::region &visible, const eka2l1::rect &extent);
 }

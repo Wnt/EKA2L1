@@ -246,10 +246,30 @@ namespace eka2l1 {
         fbsfont *get_font_object(service::ipc_context *ctx);
     };
 
+    /**
+     * \brief May a font object already made be handed out again for a NearestFont request?
+     *
+     * The caller has already matched the typeface (same adapter, face and name).
+     *
+     * \param vectorizable       The typeface is scalable.
+     * \param held_metric_id     metric_identifier of the font object held (a GDR bitmap index, a pixel size).
+     * \param wanted_metric_id   metric_identifier the request resolves to.
+     * \param held_style_bits    Request style bits the held object was made for (bold, italic, super, sub).
+     * \param wanted_style_bits  Request style bits of this request.
+     * \param height_delta       Scalable only: requested height minus the held object's height, in pixels.
+     */
+    bool fbs_font_object_reusable(const bool vectorizable, const std::uint32_t held_metric_id, const std::uint32_t wanted_metric_id,
+        const std::uint32_t held_style_bits, const std::uint32_t wanted_style_bits, const std::int32_t height_delta);
+
     struct fbsfont : public fbsobj {
         std::int32_t guest_font_offset;
         epoc::open_font_info of_info;
         fbs_server *serv;
+
+        // The style bits of the request this font was made for that end up in what the client reads back
+        // (FontSpecInTwips bold/italic, algorithmic super/subscript baseline). Two requests share a font
+        // object only when these match, as CFontStore::IsFontLoaded compares the spec and the alg style.
+        std::uint32_t spec_style_bits = 0;
 
         epoc::font_atlas atlas;
         std::vector<std::uint8_t*> shapings;

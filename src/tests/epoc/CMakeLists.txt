@@ -30,6 +30,7 @@ set(CORE_TEST_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/fontmatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/gdrmetrics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/pen_advance.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/font_reuse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/linkedfont.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/typeface_support.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/svg_icon.cpp
@@ -41,6 +42,7 @@ set(CORE_TEST_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/clock.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/fifo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/redraw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/services/window/exposure.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/note.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/msv/entry_data.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/draw_mode.cpp

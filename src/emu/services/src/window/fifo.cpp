@@ -213,6 +213,28 @@ namespace eka2l1::epoc {
         return left.empty();
     }
 
+    std::vector<eka2l1::rect> uncovered_window_rects(const common::region &previous_visible, const eka2l1::rect &previous_extent,
+        const common::region &visible, const eka2l1::rect &extent) {
+        if (previous_visible.empty() || visible.empty() || (previous_extent.top != extent.top) || (previous_extent.size != extent.size)) {
+            return {};
+        }
+
+        common::region uncovered = visible;
+        uncovered.eliminate(previous_visible);
+
+        std::vector<eka2l1::rect> result;
+        for (eka2l1::rect r : uncovered.rects_) {
+            if ((r.size.x <= 0) || (r.size.y <= 0)) {
+                continue;
+            }
+
+            r.top -= extent.top;
+            result.push_back(r);
+        }
+
+        return result;
+    }
+
     void redraw_fifo::remove_events(void *owner) {
         const std::lock_guard<std::mutex> guard(lock_);
         common::erase_elements(q_, [owner](fifo_element &elem) -> bool {

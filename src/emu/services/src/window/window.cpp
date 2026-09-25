@@ -800,7 +800,13 @@ namespace eka2l1::epoc {
             covers.push_back(child_canvas->abs_rect);
         }
 
-        return epoc::redraw_covered_by(full.evt_, win->abs_rect.top, covers);
+        const bool hidden = epoc::redraw_covered_by(full.evt_, win->abs_rect.top, covers);
+        static const bool seg_trace = std::getenv("EKA2L1_WS_SEG_TRACE") != nullptr;
+        if (seg_trace) {
+            LOG_WARN(SERVICE_WINDOW, "SEGTRACE win 0x{:X} redraw ({},{})-({},{}) {} ({} covering children)", win->id, full.evt_.top_left.x,
+                full.evt_.top_left.y, full.evt_.bottom_right.x, full.evt_.bottom_right.y, hidden ? "dropped: covered by children" : "delivered", covers.size());
+        }
+        return hidden;
     }
 
     void window_server_client::get_redraw(service::ipc_context &ctx, ws_cmd &cmd) {
