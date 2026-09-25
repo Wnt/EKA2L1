@@ -28,6 +28,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 
 namespace eka2l1::drivers {
@@ -277,6 +278,15 @@ namespace eka2l1::epoc {
             return segments_;
         }
     };
+
+    // Builds texture update commands (gdi_store_command_update_texture) and submits them to the driver at
+    // once, so an upload the bitmap cache has promised never depends on some window being drawn later.
+    void gdi_submit_texture_updates(drivers::graphics_driver *driver, bitmap_cache &bcache,
+        std::initializer_list<const gdi_store_command *> updates);
+
+    // The rectangle a BitBltMasked with a brush fills before the masked draw: the blitted part of the
+    // source (all of it for an empty source rectangle), clipped to the source bitmap.
+    eka2l1::rect masked_blit_brush_area(const eka2l1::vec2 &dest_top, const eka2l1::rect &source_rect, const eka2l1::vec2 &bitmap_size);
 
     class gdi_command_builder {
     private:

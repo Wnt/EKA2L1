@@ -18,6 +18,7 @@
  */
 
 #include <services/window/classes/gstore.h>
+#include <drivers/graphics/graphics.h>
 #include <services/window/util.h>
 #include <services/window/bitmap_cache.h>
 
@@ -270,6 +271,42 @@ namespace eka2l1::epoc {
         passes[0] = { invert(opaque), drivers::blend_factor::current_color, drivers::blend_factor::zero };
         passes[1] = { eka2l1::vec4(255, 255, 255, 255), drivers::blend_factor::one_minus_current_color, drivers::blend_factor::zero };
         return 2;
+    }
+
+    void gdi_submit_texture_updates(drivers::graphics_driver *driver, bitmap_cache &bcache,
+        std::initializer_list<const gdi_store_command *> updates) {
+        if (!driver) {
+            return;
+        }
+
+        drivers::graphics_command_builder builder;
+        gdi_command_builder gdi_builder(driver, builder, bcache, drivers::filter_option::linear, eka2l1::vec2(0, 0), 1.0f,
+            common::region{});
+
+        bool any = false;
+        for (const gdi_store_command *update : updates) {
+            if (update && (update->opcode_ == gdi_store_command_update_texture)) {
+                gdi_builder.build_single_command(*update);
+                any = true;
+            }
+        }
+
+        if (any) {
+            drivers::command_list list = builder.retrieve_command_list();
+            driver->submit_command_list(list);
+        }
+    }
+
+    eka2l1::rect masked_blit_brush_area(const eka2l1::vec2 &dest_top, const eka2l1::rect &source_rect, const eka2l1::vec2 &bitmap_size) {
+        eka2l1::rect area(dest_top, source_rect.size);
+        if ((area.size.x == 0) && (area.size.y == 0)) {
+            area.size = bitmap_size;
+        }
+
+        // The blit never reaches past the source bitmap.
+        area.size.x = std::max<int>(0, std::min<int>(area.size.x, bitmap_size.x - source_rect.top.x));
+        area.size.y = std::max<int>(0, std::min<int>(area.size.y, bitmap_size.y - source_rect.top.y));
+        return area;
     }
 
     gdi_command_builder::gdi_command_builder(drivers::graphics_driver *drv, drivers::graphics_command_builder &builder, bitmap_cache &bcache,

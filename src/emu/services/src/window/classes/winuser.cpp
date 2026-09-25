@@ -346,13 +346,16 @@ namespace eka2l1::epoc {
                 data.mask_drv_ = bcache->add_or_get(drv, mask_bitmap_bw, nullptr, &new_update_command_mask);
             }
 
-            if (new_update_command_main.opcode_ != gdi_store_command_invalid) {
-                pending_segment_->add_command(new_update_command_main);
-            }
-
-            if (new_update_command_mask.opcode_ != gdi_store_command_invalid) {
-                pending_segment_->add_command(new_update_command_mask);
-            }
+            // Send the texture uploads to the driver now instead of queueing them in this window's pending
+            // segment. The cache records the texture as current the moment add_or_get returns, so every
+            // other window reuses it from then on; a pending segment is only built once this window is
+            // drawn, which never happens for a window that is hidden, has no visible region or is destroyed
+            // first. Its uploads were lost and every later user of the bitmap drew an empty (black) texture:
+            // the Series 80 choice-list scroll bar, first blitted by a hidden scroll bar window, came out as
+            // a solid black column. An in-place upload only reaches a texture that no stored or pending
+            // draw holds (held textures get a fresh one, see bitmap_cache::add_or_get), so nothing already
+            // queued changes under it.
+            gdi_submit_texture_updates(client->get_ws().get_graphics_driver(), *bcache, { &new_update_command_main, &new_update_command_mask });
         }
 
         pending_segment_->add_command(command, (command.opcode_ == gdi_store_command_draw_bitmap) ? client->get_ws().get_bitmap_cache() : nullptr);

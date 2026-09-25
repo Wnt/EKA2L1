@@ -548,3 +548,48 @@ TEST_CASE("A masked blit reads an EColor4K mask from the channel its texture kee
         REQUIRE(found[1] == swizzle_set{ swizzle::red, swizzle::green, swizzle::blue, swizzle::alpha });
     }
 }
+
+TEST_CASE("Texture uploads reach the driver without any window being drawn", "[gdi_store]") {
+    // The bitmap cache records a texture as current as soon as it hands out the upload. The upload used to
+    // ride in the pending segment of the window that drew the bitmap first; a hidden window never builds
+    // it, and every later user of the bitmap drew the empty texture (the S80 choice-list scroll bar came
+    // out solid black). The upload now goes to the driver on its own.
+    surface_driver driver;
+    epoc::bitmap_cache cache(nullptr);
+    const auto texture = drivers::create_bitmap(&driver, { 1, 1 }, 32);
+
+    epoc::gdi_store_command update;
+    update.opcode_ = epoc::gdi_store_command_update_texture;
+    auto &upload = update.get_data_struct<epoc::gdi_store_command_update_texture_data>();
+    upload = {};
+    upload.handle_ = texture;
+    upload.texture_data_ = new char[4]{ 1, 2, 3, 4 };
+    upload.texture_size_ = 4;
+    upload.dim_ = { 1, 1 };
+    upload.pixel_per_line_ = 1;
+
+    epoc::gdi_store_command nothing;
+
+    epoc::gdi_submit_texture_updates(&driver, cache, { &update, &nothing });
+    REQUIRE(driver.uploads == 1);
+    REQUIRE(driver.images[texture] == std::vector<std::uint8_t>{ 1, 2, 3, 4 });
+    REQUIRE_FALSE(driver.invalid_use);
+
+    // No update among them: nothing is sent.
+    epoc::gdi_submit_texture_updates(&driver, cache, { &nothing, nullptr });
+    REQUIRE(driver.uploads == 1);
+}
+
+TEST_CASE("A masked blit with a brush fills the blitted part of the source", "[gdi_store]") {
+    // BitBltMasked(pos, 10x32 bitmap, (0,0)-(10,32), ...) as the S80 scroll bar does.
+    REQUIRE(epoc::masked_blit_brush_area({ 0, 33 }, rect({ 0, 0 }, { 10, 32 }), { 10, 32 }) == rect({ 0, 33 }, { 10, 32 }));
+
+    // A part of the source only.
+    REQUIRE(epoc::masked_blit_brush_area({ 5, 5 }, rect({ 0, 0 }, { 10, 14 }), { 10, 32 }) == rect({ 5, 5 }, { 10, 14 }));
+
+    // Never past the bitmap: a source rectangle that runs off it is cut back.
+    REQUIRE(epoc::masked_blit_brush_area({ 1, 0 }, rect({ 4, 0 }, { 136, 22 }), { 103, 22 }) == rect({ 1, 0 }, { 99, 22 }));
+
+    // An empty source rectangle blits the whole bitmap.
+    REQUIRE(epoc::masked_blit_brush_area({ 2, 3 }, rect({ 0, 0 }, { 0, 0 }), { 13, 11 }) == rect({ 2, 3 }, { 13, 11 }));
+}
