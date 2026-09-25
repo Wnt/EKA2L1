@@ -19,6 +19,9 @@
  */
 
 #include <services/msv/msv.h>
+#include <kernel/kernel.h>
+#include <kernel/thread.h>
+#include <cpu/arm_interface.h>
 #include <services/msv/store.h>
 #include <services/msv/operations/change.h>
 #include <services/msv/operations/create.h>
@@ -46,9 +49,12 @@
 #include <common/path.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 namespace eka2l1 {
+    void log_guest_panic_stack(kernel_system *kern, kernel::thread *thr);
+
     static const std::u16string DEFAULT_MSG_DATA_DIR = u"C:\\private\\1000484b\\Mail2\\";
     static const std::u16string DEFAULT_MSG_DATA_DIR_OLD = u"C:\\System\\Mail\\";
 
@@ -309,20 +315,11 @@ namespace eka2l1 {
     }
 
     void msv_server::absorb_entry_to_buffer(common::chunkyseri &seri, epoc::msv::entry &ent) {
-        epoc::msv::entry_data data_str;
+        // Every field goes to the guest: a TMsvEntry field left out used to carry host stack bytes, and the
+        // Series 80 message centre follows iRelatedId (CMsvEntry::SetEntryL on it when writing a message).
+        epoc::msv::entry_data data_str{};
         if (seri.get_seri_mode() == common::SERI_MODE_WRITE) {
-            data_str.data_ = ent.data_;
-            data_str.date_ = ent.time_;
-            data_str.id_ = ent.id_;
-            data_str.parent_id_ = ent.parent_id_;
-            data_str.service_id_ = ent.service_id_;
-            data_str.mtm_uid_ = ent.mtm_uid_;
-            data_str.type_uid_ = ent.type_uid_;
-            data_str.bio_type_ = ent.bio_type_;
-            data_str.size_ = ent.size_;
-
-            data_str.description_.set_length(nullptr, static_cast<std::uint32_t>(ent.description_.length()));
-            data_str.details_.set_length(nullptr, static_cast<std::uint32_t>(ent.details_.length()));
+            epoc::msv::fill_entry_data(ent, data_str);
         }
         
         if (kern->is_eka1()) {
@@ -339,16 +336,7 @@ namespace eka2l1 {
         }
 
         if (seri.get_seri_mode() == common::SERI_MODE_READ) {
-            ent.data_ = data_str.data_;
-            ent.time_ = data_str.date_;
-            ent.id_ = data_str.id_;
-            ent.parent_id_ = data_str.parent_id_;
-            ent.service_id_ = data_str.service_id_;
-            ent.mtm_uid_ = data_str.mtm_uid_;
-            ent.type_uid_ = data_str.type_uid_;
-            ent.bio_type_ = data_str.bio_type_;
-            ent.size_ = data_str.size_;
-
+            epoc::msv::apply_entry_data(data_str, ent);
             ent.description_.resize(data_str.description_.get_length());
             ent.details_.resize(data_str.details_.get_length());
         }
@@ -682,6 +670,61 @@ namespace eka2l1 {
 
         epoc::msv::entry *ent = indexer->get_entry(id.value());
         if (!ent) {
+            static const bool trace_misses = std::getenv("EKA2L1_MSV_TRACE") != nullptr;
+            if (trace_misses) {
+                LOG_TRACE(SERVICE_MSV, "GetEntry 0x{:X}: no such entry; caller stack follows", id.value());
+                log_guest_panic_stack(ctx->sys->get_kernel_system(), ctx->msg->own_thr);
+
+                // Raw words of the caller's stack, and what the words at EKA2L1_MSV_TRACE_DEREF (comma-separated
+                // stack offsets) point to, two levels deep: enough to read a caller's object without a debugger.
+                kernel_system *kern = ctx->sys->get_kernel_system();
+                kernel::thread *thr = ctx->msg->own_thr;
+                kernel::process *pr = thr->owning_process();
+                const std::uint32_t sp = (thr == kern->crr_thread()) ? kern->get_cpu()->get_reg(13)
+                                                                    : thr->get_thread_context().cpu_registers[13];
+                auto word_at = [pr](const std::uint32_t addr, bool &ok) -> std::uint32_t {
+                    std::uint32_t *w = eka2l1::ptr<std::uint32_t>(addr).get(pr);
+                    ok = (w != nullptr);
+                    return ok ? *w : 0;
+                };
+                auto dump = [&](const std::uint32_t base, const int count) {
+                    std::string line;
+                    for (int i = 0; i < count; i++) {
+                        bool ok = false;
+                        const std::uint32_t v = word_at(base + 4 * i, ok);
+                        line += ok ? fmt::format(" {:08X}", v) : std::string(" ????????");
+                    }
+                    return line;
+                };
+                for (std::uint32_t off = 0; off < 0x200; off += 0x40) {
+                    LOG_TRACE(SERVICE_MSV, "  sp+0x{:03X}:{}", off, dump(sp + off, 16));
+                }
+                if (const char *deref = std::getenv("EKA2L1_MSV_TRACE_DEREF")) {
+                    std::string list(deref);
+                    std::size_t pos = 0;
+                    while (pos < list.size()) {
+                        const std::size_t comma = list.find(',', pos);
+                        const std::string item = list.substr(pos, (comma == std::string::npos) ? std::string::npos : comma - pos);
+                        pos = (comma == std::string::npos) ? list.size() : comma + 1;
+                        const std::uint32_t off = static_cast<std::uint32_t>(std::strtoul(item.c_str(), nullptr, 0));
+                        bool ok = false;
+                        const std::uint32_t p1 = word_at(sp + off, ok);
+                        LOG_TRACE(SERVICE_MSV, "  *(sp+0x{:X}) = {:08X}:{}", off, p1, dump(p1, 64));
+                        for (int k = 0; k < 64; k++) {
+                            const std::uint32_t p2 = word_at(p1 + 4 * k, ok);
+                            if (ok && (p2 >= 0x00400000) && (p2 < 0x01000000)) {
+                                LOG_TRACE(SERVICE_MSV, "    *(+0x{:X}) = {:08X}:{}", 4 * k, p2, dump(p2, 12));
+                                for (int m = 0; m < 4; m++) {
+                                    const std::uint32_t p3 = word_at(p2 + 4 * m, ok);
+                                    if (ok && (p3 >= 0x00400000) && (p3 < 0x01000000)) {
+                                        LOG_TRACE(SERVICE_MSV, "      *(+0x{:X}+0x{:X}) = {:08X}:{}", 4 * k, 4 * m, p3, dump(p3, 12));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             ctx->complete(epoc::error_not_found);
             return;
         }

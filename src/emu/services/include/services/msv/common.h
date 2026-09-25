@@ -143,7 +143,7 @@ namespace eka2l1::epoc::msv {
         std::int32_t bio_type_ = 0;
         std::int32_t reserved_ = 0;
 
-        std::int32_t mtm_datas_[3];
+        std::int32_t mtm_datas_[3] = { 0, 0, 0 };
 
         std::vector<std::uint32_t> children_ids_;
 
@@ -249,4 +249,14 @@ namespace eka2l1::epoc::msv {
     static constexpr std::uint32_t MSV_SENT_ENTRY_ID_VALUE = 0x1005;
     static constexpr std::uint32_t MSV_FIRST_FREE_ENTRY_ID = 0x100000;
     static constexpr std::uint32_t MSV_MSG_TYPE_UID = 0x1000102C;
+
+    /**
+     * \brief The TMsvEntry image the client gets for an entry: every field set, the descriptors' lengths only.
+     */
+    void fill_entry_data(const entry &ent, entry_data &data);
+
+    /**
+     * \brief Take a client's TMsvEntry image into an entry (the descriptors' contents are read separately).
+     */
+    void apply_entry_data(const entry_data &data, entry &ent);
 }
