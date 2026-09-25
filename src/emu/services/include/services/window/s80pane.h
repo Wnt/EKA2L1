@@ -31,6 +31,7 @@
 
 namespace eka2l1 {
     class window_server;
+    struct fbsfont;
 
     namespace drivers {
         class graphics_driver;
@@ -55,7 +56,7 @@ namespace eka2l1::epoc {
      * application icon (0,100 92x100) for R_BSKN_INDICATOR_LAYOUT_WIDE (Desk, Telephone), the full-height
      * strip left of the title bar (0,0 32x200) for R_BSKN_INDICATOR_LAYOUT (Documents, Sheet, Web). It
      * paints the skin's application view background there, then the network and battery indicators, and
-     * in the wide layout a digital clock. (Window tree and pixels taken from the ROM server running under
+     * in the wide layout a digital clock (hours:minutes, redrawn when the minute changes). (Window tree and pixels taken from the ROM server running under
      * EKA2L1_ROM_EIKSRV=1.) Apps send the layout with EikSrv op 7 (SetStatusPaneLayout) when they come to
      * the foreground.
      *
@@ -91,8 +92,25 @@ namespace eka2l1::epoc {
         bool load_image(drivers::graphics_driver *driver, image &img, const std::u16string &path, const int index,
             const bool key_magenta);
 
+        fbsfont *clock_font_ = nullptr;
+        std::int64_t shown_minute_ = -1;
+
+        fbsfont *clock_font();
+        std::int64_t local_seconds() const;
+        void draw_clock(drivers::graphics_command_builder &builder, screen *scr, const common::region &visible);
+
     public:
         explicit s80_status_pane(window_server *serv);
+        ~s80_status_pane();
+
+        window_server *get_window_server() const {
+            return serv_;
+        }
+
+        /**
+         * \brief Whether the pane shows a clock whose minute has changed since it was last drawn.
+         */
+        bool clock_changed(const layout_kind kind);
 
         /**
          * \brief Record the layout an application asked for (EikSrv op 7 argument 0, a BASESKIN resource id).

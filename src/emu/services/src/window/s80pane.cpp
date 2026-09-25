@@ -22,9 +22,12 @@
 #include <services/window/screen.h>
 #include <services/window/window.h>
 #include <services/window/classes/wingroup.h>
+#include <services/window/classes/gstore.h>
+#include <services/window/classes/plugins/anim/clock/clock.h>
 
 #include <services/fbs/bitmap.h>
 #include <services/fbs/fbs.h>
+#include <services/fbs/font.h>
 
 #include <common/buffer.h>
 #include <common/cvt.h>
@@ -34,9 +37,16 @@
 #include <kernel/kernel.h>
 #include <kernel/process.h>
 #include <kernel/thread.h>
+#include <kernel/property.h>
+#include <utils/locale.h>
+#include <utils/system.h>
+#include <config/config.h>
 #include <loader/mbm.h>
 #include <system/epoc.h>
 #include <vfs/vfs.h>
+
+#include <cstdlib>
+#include <cstring>
 
 namespace eka2l1::epoc {
     // BASESKIN.RSG (Series 80 DP 2.0 SDK): the layouts an application passes to SetStatusPaneLayout.
@@ -54,8 +64,161 @@ namespace eka2l1::epoc {
     static constexpr int SKIN_NETWORK_UNAVAILABLE = 17;
     static constexpr int SKIN_BATTERY = 7;
 
+    // The wide pane's clock, as the ROM server sets up its RDigitalClock (anim trace of the ROM run): at
+    // (16,38) 60x26 in the pane window, white, sections "%-B" left / "%J%:1%T" centred / "%+B" right,
+    // bottom-aligned without descent, 2 px from the bottom. The face is the 9300 GDR's System bold of
+    // design height 20 whose metric index is 3: of the System bold faces the applications hold, the only
+    // one that reproduces the ROM server's frame pixel for pixel (raced against metrics 1, 8 and 13).
+    static const eka2l1::rect CLOCK_RECT({ 16, 138 }, { 60, 26 });
+    static constexpr std::uint32_t CLOCK_FONT_METRIC = 3;
+    static constexpr std::int32_t CLOCK_FONT_DESIGN_HEIGHT = 20;
+    static constexpr std::int32_t CLOCK_BOTTOM_MARGIN = 2;
+    static constexpr std::int64_t SECONDS_FROM_0AD_TO_1970 = 62168256000LL;
+
     s80_status_pane::s80_status_pane(window_server *serv)
         : serv_(serv) {
+    }
+
+    s80_status_pane::~s80_status_pane() {
+        if (clock_font_) {
+            clock_font_->deref();
+        }
+    }
+
+    // Local time as the ROM server's clock gets it: universal time plus the guest locale's offset
+    // (TLocale::UniversalTimeOffset on EKA1: the zone's offset, one hour more while the home zone keeps
+    // daylight saving), which is what it passes to the clock anim with SetUniversalTimeOffset.
+    std::int64_t s80_status_pane::local_seconds() const {
+        kernel_system *kern = serv_->get_kernel_system();
+        std::int64_t seconds = static_cast<std::int64_t>(kern->universal_time() / 1000000ULL) - SECONDS_FROM_0AD_TO_1970;
+
+        property_ptr prop = kern->get_prop(epoc::SYS_CATEGORY, epoc::LOCALE_DATA_KEY);
+        std::optional<epoc::locale> loc = prop ? prop->get_pkg<epoc::locale>() : std::nullopt;
+
+        if (loc) {
+            seconds += loc->universal_time_offset_;
+            if (loc->daylight_saving_ & loc->home_daylight_saving_zone_) {
+                seconds += 3600;
+            }
+        } else {
+            seconds += kern->utc_offset();
+        }
+
+        return seconds;
+    }
+
+    bool s80_status_pane::clock_changed(const layout_kind kind) {
+        if (kind != layout_wide) {
+            return false;
+        }
+
+        return (local_seconds() / 60) != shown_minute_;
+    }
+
+    fbsfont *s80_status_pane::clock_font() {
+        if (clock_font_) {
+            return clock_font_;
+        }
+
+        fbs_server *fbss = serv_->get_fbs_server();
+        if (!fbss) {
+            return nullptr;
+        }
+
+        // The window server makes no fonts of its own: take the ROM server clock's face from those the
+        // applications hold (Series 80 controls use System bold in several sizes). Early in boot it may not
+        // exist yet: draw with the closest size meanwhile and keep looking.
+        fbsfont *best = nullptr;
+        std::int32_t best_delta = 0x7FFFFFFF;
+
+        for (fbsfont *font : fbss->live_fonts()) {
+            if ((font->of_info.family != u"System") || !(font->of_info.face_attrib.style & epoc::open_font_face_attrib::bold)) {
+                continue;
+            }
+
+            if (font->of_info.metric_identifier == CLOCK_FONT_METRIC) {
+                font->ref();
+                clock_font_ = font;
+
+                LOG_INFO(SERVICE_WINDOW, "Series 80 status pane clock font: FBS font {}", font->id);
+                return clock_font_;
+            }
+
+            const std::int32_t delta = std::abs(font->of_info.metrics.design_height - CLOCK_FONT_DESIGN_HEIGHT);
+            if (delta < best_delta) {
+                best = font;
+                best_delta = delta;
+            }
+        }
+
+        return best;
+    }
+
+    void s80_status_pane::draw_clock(drivers::graphics_command_builder &builder, screen *scr, const common::region &visible) {
+        fbsfont *font = clock_font();
+        if (!font) {
+            return;
+        }
+
+        const std::int64_t now = local_seconds();
+        shown_minute_ = now / 60;
+
+        struct section_def {
+            const char16_t *format;
+            epoc::text_alignment alignment;
+        };
+
+        static const section_def sections[] = {
+            { u"%-B", epoc::text_alignment::left },
+            { u"%J%:1%T", epoc::text_alignment::center },
+            { u"%+B", epoc::text_alignment::right }
+        };
+
+        const std::int32_t baseline = CLOCK_RECT.top.y + CLOCK_RECT.size.y - CLOCK_BOTTOM_MARGIN;
+        gdi_store_command_segment segment;
+
+        for (const section_def &section : sections) {
+            const std::u16string text = clock_format_time(section.format, now);
+            if (text.empty()) {
+                continue;
+            }
+
+            gdi_store_command command;
+            command.opcode_ = gdi_store_command_draw_text;
+
+            gdi_store_command_draw_text_data &data = command.get_data_struct<gdi_store_command_draw_text_data>();
+            data.string_ = reinterpret_cast<char16_t *>(command.allocate_dynamic_data((text.length() + 1) * sizeof(char16_t)));
+            std::memcpy(data.string_, text.c_str(), (text.length() + 1) * sizeof(char16_t));
+
+            data.alignment_ = static_cast<std::uint32_t>(section.alignment);
+            data.text_box_ = eka2l1::rect(eka2l1::vec2(CLOCK_RECT.top.x, baseline), CLOCK_RECT.size);
+            data.fbs_font_ptr_ = font;
+            data.color_ = eka2l1::vec4(255, 255, 255, 255);
+
+            segment.add_command(command);
+        }
+
+        if (segment.commands_.empty()) {
+            return;
+        }
+
+        common::region clip;
+        clip.add_rect(CLOCK_RECT);
+        clip = clip.intersect(visible);
+
+        if (clip.empty()) {
+            return;
+        }
+
+        const drivers::filter_option filter = (serv_->get_kernel_system()->get_config()->nearest_neighbor_filtering
+            ? drivers::filter_option::nearest : drivers::filter_option::linear);
+
+        builder.set_feature(drivers::graphics_feature::blend, false);
+        builder.clip_bitmap_region(clip, scr->display_scale_factor);
+
+        gdi_command_builder gdi_builder(serv_->get_graphics_driver(), builder, *serv_->get_bitmap_cache(), filter,
+            eka2l1::vec2(0, 0), scr->display_scale_factor, clip);
+        gdi_builder.build_segment(segment);
     }
 
     void s80_status_pane::set_layout(kernel::process *pr, const std::uint32_t layout_res) {
@@ -249,6 +412,10 @@ namespace eka2l1::epoc {
         if (have_battery) {
             builder.draw_bitmap(battery_.handle_, 0, eka2l1::rect(battery_pos * scale, battery_.size_ * scale),
                 eka2l1::rect({ 0, 0 }, battery_.size_));
+        }
+
+        if (kind == layout_wide) {
+            draw_clock(builder, scr, visible);
         }
 
         builder.set_feature(drivers::graphics_feature::blend, false);

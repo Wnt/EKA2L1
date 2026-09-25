@@ -1160,6 +1160,17 @@ namespace eka2l1 {
         return font_obj_container.get<fbsfont>(id);
     }
 
+    std::vector<fbsfont *> fbs_server::live_fonts() {
+        std::vector<fbsfont *> fonts;
+        for (auto &obj : font_obj_container) {
+            if (obj) {
+                fonts.push_back(reinterpret_cast<fbsfont *>(obj.get()));
+            }
+        }
+
+        return fonts;
+    }
+
     void fbs_server::load_fonts_from_directory(eka2l1::io_system *io, eka2l1::directory *folder) {
         while (auto entry = folder->get_next_entry()) {
             add_single_font(io, common::utf8_to_ucs2(entry->full_path));

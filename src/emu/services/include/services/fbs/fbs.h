@@ -588,6 +588,11 @@ namespace eka2l1 {
          */
         fbsfont *get_font(const service::uid id);
 
+        /**
+         * \brief The font objects clients hold now, in creation order.
+         */
+        std::vector<fbsfont *> live_fonts();
+
         bool is_heap_busy();
         void spin_wait_heap(const std::uint32_t max_times = 200);
 

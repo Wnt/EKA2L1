@@ -546,6 +546,12 @@ namespace eka2l1::epoc {
             recalculate_visible_regions();
         }
 
+        // The Series 80 status pane's clock is part of the pane: a new minute repaints everything.
+        if (status_pane && status_pane_anchor
+            && status_pane->clock_changed(static_cast<s80_status_pane::layout_kind>(status_pane_kind))) {
+            flags_ |= FLAG_SERVER_REDRAW_PENDING;
+        }
+
         // A clock that ticked is drawn by walking the windows, so it rules out the in-place caret flip.
         const bool anims_due = anims_need_redraw();
 
@@ -666,6 +672,16 @@ namespace eka2l1::epoc {
             const std::uint64_t now = serv.get_ntimer()->microseconds();
 
             serv.get_anim_scheduler()->schedule_if_sooner(driver, this, (now / 500000 + 1) * 500000);
+        }
+
+        // The status pane clock needs a frame at the next minute.
+        if (status_pane && status_pane_anchor && (status_pane_kind == s80_status_pane::layout_wide)) {
+            window_server *serv = status_pane->get_window_server();
+            const std::uint64_t now = serv->get_ntimer()->microseconds();
+            const std::uint64_t universal_us = serv->get_kernel_system()->universal_time();
+            const std::uint64_t to_next_minute = 60000000ULL - (universal_us % 60000000ULL);
+
+            serv->get_anim_scheduler()->schedule_if_sooner(driver, this, now + to_next_minute);
         }
 
         // A clock needs a frame when its time next changes (the next second or minute), drawn in place.
