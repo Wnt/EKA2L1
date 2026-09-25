@@ -137,7 +137,8 @@ namespace eka2l1::epoc {
             atlas_data_.get(), { pack_state_->width_, pack_state_->width_ }, positions.data(), infos);
     }
 
-    bool font_atlas::draw_text(const std::u16string &text, const eka2l1::rect &text_box, const epoc::text_alignment alignment, drivers::graphics_driver *driver, drivers::graphics_command_builder &builder, const eka2l1::vec2f scale_vector, bool source_over_alpha) {
+    bool font_atlas::draw_text(const std::u16string &text, const eka2l1::rect &text_box, const epoc::text_alignment alignment, drivers::graphics_driver *driver, drivers::graphics_command_builder &builder, const eka2l1::vec2f scale_vector, bool source_over_alpha,
+        eka2l1::vec2 *pen_span) {
         // Clamp the atlas to what the GPU can actually allocate. Large fonts
         // (e.g. high display-scale rendering) would otherwise request an atlas
         // bigger than GL_MAX_TEXTURE_SIZE; the create then fails and the
@@ -267,6 +268,10 @@ namespace eka2l1::epoc {
             drivers::blend_factor::frag_out_alpha, drivers::blend_factor::one_minus_frag_out_alpha,
             drivers::blend_factor::one, source_over_alpha ? drivers::blend_factor::one_minus_frag_out_alpha : drivers::blend_factor::one);
 
+        if (pen_span) {
+            pen_span->x = cur_pos.x;
+        }
+
         // Start to render these texts.
         for (auto &chr : text) {
             if ((chr >= 0x200c && chr <= 0x200f) || (chr >= 0x202a && chr <= 0x202e) || (chr >= 0xfffe && chr <= 0xffff)) {
@@ -295,6 +300,10 @@ namespace eka2l1::epoc {
 
             // TODO: Newline
             cur_pos.x += static_cast<int>(std::round(info.xadv * scale_vector[0]));
+        }
+
+        if (pen_span) {
+            pen_span->y = cur_pos.x;
         }
 
         builder.set_feature(drivers::graphics_feature::blend, false);

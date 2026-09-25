@@ -88,6 +88,10 @@ namespace eka2l1::epoc {
         // The pen's current position: MoveTo/MoveBy set it, DrawLine/DrawLineTo/DrawLineBy end on it.
         eka2l1::vec2 line_position{ 0, 0 };
 
+        // SetUnderlineStyle / SetStrikethroughStyle (TFontUnderline, TFontStrikethrough: on = 1).
+        bool underline{ false };
+        bool strikethrough{ false };
+
         void submit_queue_commands(kernel::thread *rq);
         void on_command_batch_done(service::ipc_context &ctx) override;
 

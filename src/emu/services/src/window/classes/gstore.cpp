@@ -28,6 +28,8 @@
 #include <common/time.h>
 #include <common/algorithm.h>
 
+#include <algorithm>
+
 namespace eka2l1::epoc {
     // NOTE: Must store objects then free ref with local font atlas.
     gdi_store_command_segment::~gdi_store_command_segment() {
@@ -358,8 +360,32 @@ namespace eka2l1::epoc {
 
         scale_rectangle(scaled_text_box, scale_factor_);
 
+        eka2l1::vec2 pen_span{ 0, 0 };
         text_font->atlas.draw_text(cmd.string_, scaled_text_box, static_cast<epoc::text_alignment>(cmd.alignment_),
-            driver_, builder_, { scale_to_pass, scale_to_pass }, premultiplied_target_);
+            driver_, builder_, { scale_to_pass, scale_to_pass }, premultiplied_target_, &pen_span);
+
+        if ((cmd.text_flags_ & (GDI_STORE_COMMAND_TEXT_UNDERLINE | GDI_STORE_COMMAND_TEXT_STRIKETHROUGH)) && (pen_span.y > pen_span.x)) {
+            // CFbsBitGc: both lines are Max(HeightInPixels / 10, 1) thick and span the text's advance; the
+            // underline starts 1 + thickness / 2 below the baseline (APIExGetUnderlineMetrics), the
+            // strikethrough AscentInPixels * 5 / 12 + 1 above it (GetStrikethroughMetrics). The text box's
+            // top is the baseline here.
+            const int thickness = std::max<int>(text_font->of_info.metrics.max_height / 10, 1);
+            const int baseline = scaled_text_box.top.y;
+
+            builder_.set_brush_color_detail(cmd.color_);
+
+            if (cmd.text_flags_ & GDI_STORE_COMMAND_TEXT_UNDERLINE) {
+                const int top = 1 + thickness / 2;
+                builder_.draw_rectangle(eka2l1::rect({ pen_span.x, baseline + static_cast<int>(top * scale_factor_) },
+                    { pen_span.y - pen_span.x, std::max<int>(static_cast<int>(thickness * scale_factor_), 1) }));
+            }
+
+            if (cmd.text_flags_ & GDI_STORE_COMMAND_TEXT_STRIKETHROUGH) {
+                const int top = -(text_font->of_info.metrics.ascent * 5 / 12) - 1;
+                builder_.draw_rectangle(eka2l1::rect({ pen_span.x, baseline + static_cast<int>(top * scale_factor_) },
+                    { pen_span.y - pen_span.x, std::max<int>(static_cast<int>(thickness * scale_factor_), 1) }));
+            }
+        }
     }
 
     void gdi_command_builder::build_command_draw_raw_texture(const gdi_store_command_draw_raw_texture_data &cmd) {
