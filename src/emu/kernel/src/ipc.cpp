@@ -62,6 +62,7 @@ namespace eka2l1 {
         , function(0)
         , msg_session(nullptr)
         , session_ptr_lle(0)
+        , sender_session_uid(0)
         , request_sts(0)
         , msg_status(ipc_message_status::none)
         , id(0)
