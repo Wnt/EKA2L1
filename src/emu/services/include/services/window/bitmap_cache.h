@@ -40,6 +40,15 @@ namespace eka2l1::epoc {
     constexpr std::uint32_t MAX_CACHE_SIZE = 1024;
     struct gdi_store_command;
 
+    /**
+     * @brief   Bits per pixel of the driver texture the cache uploads for a bitmap.
+     *
+     * Palette, 1bpp and 4bpp bitmaps are expanded to 24bpp and extended bitmaps to 32bpp;
+     * every other bitmap keeps its own depth. A 12bpp texture holds EColor4K's 0RGB pixels
+     * as RGBA4444, which the driver swizzles (G, B, A, 1) back into RGB order.
+     */
+    std::uint32_t get_suitable_bpp_for_bitmap(epoc::bitwise_bitmap *bmp);
+
     class bitmap_cache {
     public:
         using driver_texture_handle_array = std::array<drivers::handle, MAX_CACHE_SIZE>;

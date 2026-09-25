@@ -474,10 +474,23 @@ namespace eka2l1::epoc {
             }
         }
 
+        // The mask shader reads the mask's red channel. EColor4K is uploaded as RGBA4444 holding 0RGB,
+        // which the driver swizzles (G, B, A, 1) back into place: red lives in the texture's green
+        // channel, and the texture's own red channel is the unused top nibble, zero in every pixel.
+        // Read through (R, G, B, R) such a mask is empty, and inverted it lets the whole source
+        // through, key colour included: the magenta boxes around Series 80 icons with EColor4K masks.
+        const bool mask_is_color4k = mask_bitmap_bw && (get_suitable_bpp_for_bitmap(mask_bitmap_bw) == 12);
+
         if (mask_bitmap_bw && !alpha_blending && !epoc::is_display_mode_alpha(mask_bitmap_bw->settings_.current_display_mode())) {
             swizzle_alteration = true;
-            builder_.set_swizzle(mask_bitmap_drv, drivers::channel_swizzle::red, drivers::channel_swizzle::green,
-                drivers::channel_swizzle::blue, drivers::channel_swizzle::red);
+
+            if (mask_is_color4k) {
+                builder_.set_swizzle(mask_bitmap_drv, drivers::channel_swizzle::green, drivers::channel_swizzle::blue,
+                    drivers::channel_swizzle::alpha, drivers::channel_swizzle::green);
+            } else {
+                builder_.set_swizzle(mask_bitmap_drv, drivers::channel_swizzle::red, drivers::channel_swizzle::green,
+                    drivers::channel_swizzle::blue, drivers::channel_swizzle::red);
+            }
         }
 
         builder_.set_texture_filter(source_bitmap_drv, false, texture_filter_);
@@ -502,8 +515,14 @@ namespace eka2l1::epoc {
         }
         
         if (swizzle_alteration) {
-            builder_.set_swizzle(mask_bitmap_drv, drivers::channel_swizzle::red, drivers::channel_swizzle::green,
-                drivers::channel_swizzle::blue, drivers::channel_swizzle::alpha);
+            // Back to the texture's own channel order, so it still draws right as a plain bitmap.
+            if (mask_is_color4k) {
+                builder_.set_swizzle(mask_bitmap_drv, drivers::channel_swizzle::green, drivers::channel_swizzle::blue,
+                    drivers::channel_swizzle::alpha, drivers::channel_swizzle::one);
+            } else {
+                builder_.set_swizzle(mask_bitmap_drv, drivers::channel_swizzle::red, drivers::channel_swizzle::green,
+                    drivers::channel_swizzle::blue, drivers::channel_swizzle::alpha);
+            }
         }
     }
 
