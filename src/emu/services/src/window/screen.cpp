@@ -27,6 +27,7 @@
 
 #include <common/rgb.h>
 #include <common/time.h>
+#include <services/window/s80pane.h>
 #include <config/app_settings.h>
 #include <config/config.h>
 #include <drivers/itc.h>
@@ -48,6 +49,17 @@ namespace eka2l1::epoc {
 
         bool do_it(window *win) {
             if (win->type != window_kind::client) {
+                // The Series 80 status pane is a layer right behind its anchor group: everything behind the
+                // group has been drawn by now, none of the group's windows yet.
+                if ((win->type == window_kind::group) && win->scr && win->scr->status_pane
+                    && (win == win->scr->status_pane_anchor)
+                    && (win->scr->flags_ & screen::FLAG_SERVER_REDRAW_PENDING)) {
+                    screen *scr = win->scr;
+                    scr->status_pane->draw(builder_, scr, static_cast<s80_status_pane::layout_kind>(scr->status_pane_kind),
+                        scr->status_pane_region);
+                    total_redrawed_++;
+                }
+
                 return false;
             }
 
@@ -1101,6 +1113,27 @@ namespace eka2l1::epoc {
         }
 
         bool do_it(epoc::window *win) override {
+            // The Series 80 status pane: an opaque layer right behind its anchor group. The walk visits a
+            // group after all of its windows, so what is left here is what the pane can show, and nothing
+            // behind the group sees that area any more.
+            if ((win->type == epoc::window_kind::group) && win->scr && win->scr->status_pane
+                && (win == win->scr->status_pane_anchor)) {
+                screen *scr = win->scr;
+                common::region pane_region;
+                pane_region.add_rect(s80_status_pane::rect_of(static_cast<s80_status_pane::layout_kind>(scr->status_pane_kind)));
+                pane_region = pane_region.intersect(visible_left_region_);
+                visible_left_region_.eliminate(pane_region);
+
+                if (!pane_region.identical(scr->status_pane_region)) {
+                    scr->status_pane_region = pane_region;
+                    if (trigger_redraw_) {
+                        scr->flags_ |= screen::FLAG_SERVER_REDRAW_PENDING;
+                    }
+                }
+
+                return false;
+            }
+
             if (win->type == epoc::window_kind::client) {
                 epoc::canvas_base *winuser = reinterpret_cast<epoc::canvas_base*>(win);
                 common::region previous_region = winuser->visible_region;
@@ -1152,6 +1185,22 @@ namespace eka2l1::epoc {
         eka2l1::rect master_rect{ eka2l1::vec2(0, 0), current_mode().size };
 
         master_region.add_rect(master_rect);
+
+        if (status_pane) {
+            s80_status_pane::layout_kind kind = s80_status_pane::layout_none;
+            epoc::window_group *anchor = status_pane->find_anchor(this, kind);
+
+            if ((anchor != status_pane_anchor) || (static_cast<int>(kind) != status_pane_kind)) {
+                status_pane_anchor = anchor;
+                status_pane_kind = static_cast<int>(kind);
+                status_pane_region.make_empty();
+
+                if (!dont_trigger_redraw) {
+                    flags_ |= FLAG_SERVER_REDRAW_PENDING;
+                }
+            }
+        }
+
         window_visible_region_calc_walker walker(master_region, !dont_trigger_redraw);
 
         root->walk_tree(&walker, epoc::window_tree_walk_style::bonjour_children);

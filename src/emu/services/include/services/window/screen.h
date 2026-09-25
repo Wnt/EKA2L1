@@ -63,6 +63,7 @@ namespace eka2l1::epoc {
     struct window;
     struct window_group;
     struct screen;
+    class s80_status_pane;
     struct anim_executor;
 
     enum focus_change_property {
@@ -146,6 +147,13 @@ namespace eka2l1::epoc {
 
         // Every animation (RAnim) on a window of this screen. Clocks tick through the screen's redraws.
         std::vector<anim_executor *> anims_;
+
+        // Series 80 status pane stand-in (s80pane.h), set when the HLE Eikon server got a layout. The pane
+        // sits right behind status_pane_anchor; status_pane_region is what of it can be seen.
+        s80_status_pane *status_pane = nullptr;
+        epoc::window_group *status_pane_anchor = nullptr;
+        int status_pane_kind = 0;
+        common::region status_pane_region;
 
         enum {
             FLAG_NEED_RECALC_VISIBLE = 1 << 0,

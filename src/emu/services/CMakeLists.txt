@@ -158,6 +158,7 @@ add_library(epocservs
         include/services/window/bitmap_cache.h
         include/services/window/keys.h
         include/services/window/scheduler.h
+        include/services/window/s80pane.h
         include/services/window/screen.h
         include/services/window/util.h
         include/services/window/window.h
@@ -334,6 +335,7 @@ add_library(epocservs
         src/window/io.cpp
         src/window/keytran.cpp
         src/window/scheduler.cpp
+        src/window/s80pane.cpp
         src/window/screen.cpp
         src/window/surface.cpp
         src/window/util.cpp

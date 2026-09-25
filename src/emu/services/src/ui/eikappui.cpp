@@ -24,6 +24,9 @@
 
 #include <services/ui/cap/oom_app.h>
 #include <services/ui/eikappui.h>
+#include <services/window/window.h>
+#include <kernel/kernel.h>
+#include <kernel/thread.h>
 
 #include <cstring>
 
@@ -131,13 +134,28 @@ namespace eka2l1 {
             cap_session_->unblank_screen(ctx);
             break;
 
+        case eik_s80_set_status_pane_layout: {
+            // Argument 0 is the layout's BASESKIN resource id. The window server paints the pane in the
+            // ROM Eikon server's place (services/window/s80pane.h), behind the application that sent it.
+            const std::uint32_t layout = *ctx->get_argument_value<std::uint32_t>(0);
+            window_server *winserv = reinterpret_cast<window_server *>(ctx->sys->get_kernel_system()->get_by_name<service::server>(
+                eka2l1::get_winserv_name_by_epocver(ctx->sys->get_symbian_version_use())));
+
+            if (winserv && ctx->msg->own_thr) {
+                winserv->s80_set_status_pane_layout(ctx->msg->own_thr->owning_process(), layout);
+            }
+
+            LOG_TRACE(SERVICE_UI, "Series 80 EikSrv SetStatusPaneLayout 0x{:X}", layout);
+            ctx->complete(epoc::error_none);
+            break;
+        }
+
         case eik_s80_notify_alarm_server_of_task_change:
         case eik_s80_launch_task_list:
         case eik_s80_cycle_tasks:
         case eik_s80_add_to_stack:
         case eik_s80_remove_from_stack:
         case eik_s80_set_status_pane_flags:
-        case eik_s80_set_status_pane_layout:
         case eik_s80_notifier:
         case eik_s80_extension:
         case eik_s80_update_status_pane_layout:

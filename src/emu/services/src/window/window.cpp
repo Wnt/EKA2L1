@@ -2239,6 +2239,20 @@ namespace eka2l1 {
         return fallback;
     }
 
+    void window_server::s80_set_status_pane_layout(kernel::process *pr, const std::uint32_t layout_res) {
+        if (!s80_status_pane_) {
+            s80_status_pane_ = std::make_unique<epoc::s80_status_pane>(this);
+        }
+
+        s80_status_pane_->set_layout(pr, layout_res);
+
+        for (epoc::screen *scr = screens; scr; scr = scr->next) {
+            scr->status_pane = s80_status_pane_.get();
+            scr->need_update_visible_regions(true);
+            scr->flags_ |= epoc::screen::FLAG_SERVER_REDRAW_PENDING;
+        }
+    }
+
     bool window_server::switch_to_app(const std::uint32_t app_uid, const char *why) {
         kern->lock();
         epoc::window_group *group = find_group_of_app(app_uid);

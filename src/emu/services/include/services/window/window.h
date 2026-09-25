@@ -48,6 +48,7 @@
 #include <services/window/opheader.h>
 #include <services/window/protocol.h>
 #include <services/window/scheduler.h>
+#include <services/window/s80pane.h>
 #include <services/window/screen.h>
 
 #include <kernel/server.h>
@@ -484,6 +485,9 @@ namespace eka2l1 {
         void ship_key_by_character(const std::uint32_t scancode, const std::uint32_t code, const std::uint32_t modifiers,
             const bool key_up);
 
+        // Series 80 v2 status pane stand-in for the HLE Eikon server (s80pane.h); made on the first layout.
+        std::unique_ptr<epoc::s80_status_pane> s80_status_pane_;
+
         // Series 80 v2 shell: the hardware application buttons (see s80_handle_app_key in window.cpp).
         int s80_app_key_evt_{ -1 };
         bool s80_handle_app_key(const epoc::event &guest_event);
@@ -513,6 +517,11 @@ namespace eka2l1 {
         bool switch_to_app(const std::uint32_t app_uid, const char *why = "host");
 
         void map_direct_framebuffer(epoc::screen *scr);
+
+        /**
+         * \brief A Series 80 application set its status pane layout (EikSrv op 7) with the HLE Eikon server.
+         */
+        void s80_set_status_pane_layout(kernel::process *pr, const std::uint32_t layout_res);
 
         epoc::ws::uid next_uid() {
             return ++obj_uid;
