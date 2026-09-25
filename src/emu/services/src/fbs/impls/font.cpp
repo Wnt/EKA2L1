@@ -418,6 +418,13 @@ namespace eka2l1 {
         // Set bitmap type that we gonna output
         static_cast<epoc::font_spec_v1 &>(target_spec).style.reset_flags();
         static_cast<epoc::font_spec_v1 &>(target_spec).style.set_glyph_bitmap_type(adapter->get_output_bitmap_type());
+
+        // Keep the weight and posture the font was asked for. Clients tell loaded fonts apart by
+        // FontSpecInTwips: with the style dropped, a bold font's spec equalled the regular font of the same
+        // height, and on Symbian OS 7.0s the client went on drawing with the regular one it already held.
+        // Every Series 80 CBA label, title and the Desk date were System regular where the device draws bold.
+        static_cast<epoc::font_spec_v1 &>(target_spec).style.flags |= static_cast<epoc::font_spec_v1 &>(given_spec).style.flags
+            & (epoc::font_style_base::bold | epoc::font_style_base::italic);
     }
 
     void fbscli::num_typefaces(service::ipc_context *ctx) {
