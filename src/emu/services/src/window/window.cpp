@@ -1344,6 +1344,17 @@ namespace eka2l1::epoc {
             ctx.complete(epoc::error_not_supported);
             break;
 
+        case ws_cl_op_set_system_pointer_cursor:
+        case ws_cl_op_claim_system_pointer_cursor_list:
+        case ws_cl_op_free_system_pointer_cursor_list:
+        case ws_cl_op_set_default_system_pointer_cursor:
+        case ws_cl_op_clear_default_system_pointer_cursor:
+            // The Eikon server claims the system pointer-cursor list and installs its cursors while it
+            // constructs (Series 80 EikSrvUi does, before it captures the application buttons). There is
+            // no system cursor list here; accept the requests so the server gets past them.
+            ctx.complete(epoc::error_none);
+            break;
+
         default:
             LOG_INFO(SERVICE_WINDOW, "Unimplemented ClOp: 0x{:x}", cmd.header.op);
             break;
@@ -2256,8 +2267,9 @@ namespace eka2l1 {
     // Series 80 v2 (Nokia 9300/9500): the eight application buttons above the keyboard are
     // EStdKeyApplication0..7. On the device they belong to the Eikon server's UI library
     // (EikSrvUi.dll; its "EikAppKey" active object captures their ups and downs and launches or
-    // foregrounds the bound application), and the focused application never sees them. EKA2L1
-    // replaces the Eikon server with an HLE that owns no keys, so the buttons did nothing here.
+    // foregrounds the bound application; SysAp.app holds the Desk and "My own" buttons the same
+    // way), and the focused application never sees them. EKA2L1 replaces the Eikon server with
+    // an HLE that owns no keys and SysAp does not run, so the buttons did nothing here.
     // The window server stands in for that owner while no guest has captured the key itself: a
     // ROM Eikon server brought up later takes the buttons over without a code change.
     struct s80_app_key_binding {
@@ -2271,10 +2283,10 @@ namespace eka2l1 {
         { epoc::std_key_application_1, 0x101F4D0B, "Telephone" },      // PhoneApp
         { epoc::std_key_application_2, 0x100053B3, "Messaging" },      // MCentre
         { epoc::std_key_application_3, 0x101F4DE8, "Web" },            // Opera
-        { epoc::std_key_application_4, 0x00000000, "Contacts" },       // no Contacts application in the RAE-6 Z: dump
+        { epoc::std_key_application_4, 0x100007ED, "Contacts" },       // Cmgr (contacts manager)
         { epoc::std_key_application_5, 0x10003A64, "Documents" },      // CWord
         { epoc::std_key_application_6, 0x10003A5C, "Calendar" },       // Agenda
-        { epoc::std_key_application_7, 0x00000000, "My own" },         // user-assigned on the device ("Own key uid")
+        { epoc::std_key_application_7, 0x100007BA, "My own" },         // user-assigned on the device (SharedData 101f8e64 "Own key uid"); File manager is the factory default
     };
 
     static const s80_app_key_binding *s80_app_key_binding_of(const std::int32_t scancode) {
