@@ -428,6 +428,7 @@ namespace eka2l1 {
 
     public:
         explicit fbs_server(eka2l1::system *sys);
+        void ensure_initialized();
         ~fbs_server() override;
 
         service::uid init();

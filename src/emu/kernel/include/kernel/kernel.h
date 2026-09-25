@@ -20,6 +20,7 @@
 #pragma once
 
 #include <kernel/btrace.h>
+#include <kernel/raw_event.h>
 #include <kernel/change_notifier.h>
 #include <kernel/chunk.h>
 #include <kernel/codeseg.h>
@@ -290,6 +291,8 @@ namespace eka2l1 {
 
     class kernel_system {
     private:
+        kernel::raw_event_queue raw_events_;
+        void deliver_raw_event();
         friend class debugger_base;
         friend class imgui_debugger;
         friend class gdbstub;
@@ -344,6 +347,9 @@ namespace eka2l1 {
         std::uint32_t cpu_hz_;
         std::int32_t utc_offset_;
         bool home_time_follows_locale_ = false;
+        kernel::uid window_server_thread_ = 0;
+        address window_server_entry_ = 0;
+        bool window_server_handles_screen_on_ = false;
 
         epocver kern_ver_;
         language lang_;
@@ -399,6 +405,13 @@ namespace eka2l1 {
         void cpu_exception_thread_handle(arm::core *core);
 
     public:
+        bool rom_raw_input_enabled() const;
+        void capture_raw_event_hook();
+        void release_raw_event_hook();
+        void request_raw_event(address buffer, address status);
+        void cancel_raw_event();
+        int add_raw_event(const epoc::raw_event_eka1 &event);
+        void detach_raw_event_owner(kernel::thread *thread);
         explicit kernel_system(system *esys, ntimer *timing, io_system *io_sys, config::state *conf,
             config::app_settings *settings, loader::rom *rom_info, arm::core *cpu, disasm *diassembler);
 
@@ -418,6 +431,9 @@ namespace eka2l1 {
 
         void call_ipc_complete_callbacks(ipc_msg *msg, const int complete_code);
         void call_thread_kill_callbacks(kernel::thread *target, const std::string &category, const std::int32_t reason);
+
+        void register_window_server(kernel::thread *owner, address entry);
+        void register_window_server_screen_on(kernel::thread *owner, bool handles);
         void call_process_switch_callbacks(arm::core *run_core, kernel::process *old, kernel::process *new_one);
         void run_codeseg_loaded_callback(const std::string &lib_name, kernel::process *attacher, codeseg_ptr target);
         void run_imb_range_callback(kernel::process *caller, address range_addr, const std::size_t range_size);

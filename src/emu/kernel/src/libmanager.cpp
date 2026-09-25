@@ -38,6 +38,7 @@
 #include <mem/page.h>
 #include <utils/dll.h>
 #include <utils/err.h>
+#include <utils/reqsts.h>
 #include <vfs/vfs.h>
 
 #include <kernel/codeseg.h>
@@ -45,6 +46,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <unordered_map>
 #include <vector>
 
@@ -433,6 +435,13 @@ namespace eka2l1::hle {
         while (iterator->next_entry(entry) == 0) {
             const std::string original_map_name = eka2l1::replace_extension(eka2l1::filename(entry.name), "");
             const std::string patch_map_path = eka2l1::add_path(patch_folder, entry.name);
+
+            // The ROM-wserv experiment must exercise the device's own rasterizer.
+            if (kern_->get_epoc_version() == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV")
+                && original_map_name == "scdv.dll") {
+                LOG_INFO(KERNEL, "ROM wserv: keeping the original scdv.dll exports");
+                continue;
+            }
 
             epocver start_ver = kern_->get_epoc_version();
 
@@ -1037,6 +1046,15 @@ namespace eka2l1::hle {
     }
 
     codeseg_ptr lib_manager::load(const std::u16string &name) {
+        // The RAE-6 package's ELOCL.LOC is a ROM-format image linked outside the
+        // supplied core ROM. The core contains the same locale UID as ELocl.dll.
+        // WSERV requests the .LOC fallback; use the core's executable copy during
+        // this experiment instead of attempting to parse the package copy as E32.
+        if (kern_->get_epoc_version() == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV")
+            && common::compare_ignore_case(name, std::u16string(u"ELOCL.LOC")) == 0) {
+            LOG_INFO(KERNEL, "ROM wserv: resolving ELOCL.LOC to the core ELocl.dll");
+            return load(u"Z:\\System\\Libs\\elocl.dll");
+        }
         bool is_driver_lib = false;
 
         if (kern_->is_eka1()) {

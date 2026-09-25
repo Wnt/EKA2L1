@@ -117,6 +117,10 @@ namespace eka2l1 {
 
     void kernel_system::wipeout() {
         wiping_ = true;
+        raw_events_.reset();
+        window_server_thread_ = 0;
+        window_server_entry_ = 0;
+        window_server_handles_screen_on_ = false;
         timing_->remove_event(realtime_ipc_signal_evt_);
         stop_ipc_watch(timing_);
 
@@ -826,9 +830,26 @@ namespace eka2l1 {
     }
 
     void kernel_system::call_thread_kill_callbacks(kernel::thread *target, const std::string &category, const std::int32_t reason) {
+        if (target->unique_id() == window_server_thread_) {
+            window_server_thread_ = 0;
+            window_server_entry_ = 0;
+            window_server_handles_screen_on_ = false;
+        }
         for (auto &thread_kill_callback_func : thread_kill_callbacks_) {
             if (thread_kill_callback_func)
                 thread_kill_callback_func(target, category, reason);
+        }
+    }
+
+    void kernel_system::register_window_server(kernel::thread *owner, address entry) {
+        window_server_thread_ = owner->unique_id();
+        window_server_entry_ = entry;
+        window_server_handles_screen_on_ = false;
+    }
+
+    void kernel_system::register_window_server_screen_on(kernel::thread *owner, bool handles) {
+        if (owner->unique_id() == window_server_thread_) {
+            window_server_handles_screen_on_ = handles;
         }
     }
 

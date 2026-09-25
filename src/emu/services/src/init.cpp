@@ -553,7 +553,8 @@ namespace eka2l1 {
             // Series 80 v2), so its EikSrvUi owns the application buttons and the task list. The ROM
             // server also brings up the notifier and view servers itself, and a pre-registered HLE of
             // either name makes that construction leave with KErrAlreadyExists.
-            const bool rom_eiksrv = std::getenv("EKA2L1_ROM_EIKSRV") != nullptr;
+            const bool rom_eiksrv = std::getenv("EKA2L1_ROM_EIKSRV") != nullptr
+                || (sys->get_symbian_version_use() == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV"));
 
             // These needed to be HLEd
             CREATE_SERVER(sys, applist_server);
@@ -667,16 +668,30 @@ namespace eka2l1 {
                 return;
             }
 
+            // EKA1 RFbsSession opens FbsSharedChunk before connecting to the server.
+            // Lazy initialization on Connect was too late for a non-GUI executable:
+            // it started ROM fbserv, mapped that heap, then connected to HLE FBS and
+            // interpreted our offsets against the other heap. Publish the HLE heaps
+            // before any guest runs.
+            if (kern->is_eka1()) {
+                auto *fbs = kern->get_by_name<fbs_server>(epoc::get_fbs_server_name_by_epocver(kern->get_epoc_version()));
+                if (fbs) {
+                    fbs->ensure_initialized();
+                }
+            }
+
             std::string list;
             bool optional_entries = false;
             if (const char *env = std::getenv("EKA2L1_PRESTART")) {
                 list = env;
-            } else if (std::getenv("EKA2L1_ROM_EIKSRV") && kern->is_eka1() && sys->is_s80_device_active()) {
+            } else if ((std::getenv("EKA2L1_ROM_EIKSRV") || std::getenv("EKA2L1_ROM_WSERV")) && kern->is_eka1() && sys->is_s80_device_active()) {
                 // SysState.exe (tools/s80-sysstate, ours) publishes the SharedData system state Starter
                 // would have left (state.val=203 ...); without it the Eikon server's alarm alert server
                 // refuses the ROM AlarmServer, which is then restarted twice a second. Optional: it is
                 // started only when the data dir carries it.
-                list = "C:\\System\\Programs\\SysState.exe;Z:\\System\\Programs\\SecurityServer.exe";
+                list = std::getenv("EKA2L1_ROM_WSERV") && !std::getenv("EKA2L1_ROM_STARTER")
+                    ? "Z:\\System\\Programs\\SecurityServer.exe"
+                    : "C:\\System\\Programs\\SysState.exe;Z:\\System\\Programs\\SecurityServer.exe";
                 optional_entries = true;
             } else if (kern->is_eka1() && sys->is_s80_device_active()) {
                 // With the HLE Eikon server nothing else starts SecurityServer (the PIN/security-code
@@ -684,6 +699,13 @@ namespace eka2l1 {
                 // connection fails, it shows an error note and closes, leaving a black screen. The
                 // server itself only needs ETel, which the HLE provides.
                 list = "Z:\\System\\Programs\\SecurityServer.exe";
+            }
+
+            // EKA2L1_ROM_WSERV is a default-off EKA1/S80 feasibility experiment. The
+            // host window object is only a display adapter in this mode; ewsrv owns
+            // Windowserver. Keep HLE FBS for the first experiment.
+            if (sys->get_symbian_version_use() == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV")) {
+                list = "Z:\\System\\Libs\\ewsrv.exe;" + list;
             }
 
             std::size_t start = 0;
