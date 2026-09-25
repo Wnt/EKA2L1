@@ -27,6 +27,10 @@
 #include <system/epoc.h>
 #include <utils/err.h>
 
+#include <cstdlib>
+#include <mem/ptr.h>
+#include <kernel/process.h>
+
 namespace eka2l1 {
     std::string get_etel_server_name_by_epocver(const epocver ver) {
         if (ver <= epocver::eka2) {
@@ -206,6 +210,17 @@ namespace eka2l1 {
         epoc::etel_phone_info info;
         const std::int32_t index = *ctx->get_argument_value<std::int32_t>(1);
 
+        // Experiment: refuse GetPhoneInfo to one process, to learn whether a start-up failure
+        // is decided from the phone info this HLE returns.
+        if (const char *victim = std::getenv("EKA2L1_ETEL_NO_PHONEINFO_FOR")) {
+            kernel::process *pr = ctx->msg->own_thr->owning_process();
+            if (pr && (pr->name().find(victim) != std::string::npos)) {
+                LOG_INFO(SERVICE_ETEL, "Refusing GetPhoneInfo to {} (EKA2L1_ETEL_NO_PHONEINFO_FOR)", pr->name());
+                ctx->complete(epoc::error_not_found);
+                return;
+            }
+        }
+
         epoc::etel::module_manager &mngr = server<etel_server>()->mngr_;
         std::optional<std::uint32_t> real_index = mngr.get_entry_real_index(index, epoc::etel_entry_phone);
 
@@ -334,6 +349,28 @@ namespace eka2l1 {
                 // Not a line: a TSY extension object (Nokia's CUSTOMAPI and friends). Open it as
                 // a stub; the Series 80 system servers cannot construct without one.
                 const std::string ext_name = common::ucs2_to_utf8(name_of_object.value());
+                // Experiment: refuse extension objects to one process, to see how it reacts to a
+                // failed open (does it honour the result, and with which code does it give up).
+                if (const char *victim = std::getenv("EKA2L1_ETEL_NO_EXT_FOR")) {
+                    kernel::process *pr = ctx->msg->own_thr->owning_process();
+                    if (pr && (pr->name().find(victim) != std::string::npos)) {
+                        LOG_INFO(SERVICE_ETEL, "Refusing TSY extension object {} to {} (EKA2L1_ETEL_NO_EXT_FOR)", ext_name, pr->name());
+                        ctx->complete(epoc::error_not_found);
+                        return;
+                    }
+                }
+
+                if (ctx->sys->get_kernel_system()->is_eka1()) {
+                    // Diagnostic: the 7.0s client passes a pointer in slot 1 here (the 9.x one passes nothing);
+                    // show what it points at, to learn whether the server is expected to fill it.
+                    kernel::process *pr = ctx->msg->own_thr->owning_process();
+                    const std::uint32_t a1 = static_cast<std::uint32_t>(ctx->msg->args.args[1]);
+                    std::uint32_t *words = eka2l1::ptr<std::uint32_t>(a1).get(pr);
+                    if (words) {
+                        LOG_INFO(SERVICE_ETEL, "Extension open slot1 0x{:X} -> {:08X} {:08X} {:08X} {:08X}", a1, words[0], words[1], words[2], words[3]);
+                    }
+                }
+
                 LOG_INFO(SERVICE_ETEL, "Opening TSY extension object {} from phone as a stub", ext_name);
                 new_sub = std::make_unique<etel_custom_subsession>(this, ext_name, server<etel_server>()->legacy_level());
             }

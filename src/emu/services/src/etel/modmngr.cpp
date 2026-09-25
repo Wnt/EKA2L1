@@ -96,7 +96,11 @@ namespace eka2l1::epoc::etel {
         phone_entry.tsy_name_ = module_lowercased;
 
         epoc::etel_phone_info phone_info;
-        phone_info.exts_ = 0;
+        // TPhoneInfo::iExtensions is the extension API level the TSY offers: Nokia's PhoneTsy
+        // (cmmphonefactorytsy.cpp) reports KETelExtMultimodeV1 = 3000 and clients test
+        // "iExtensions >= KETelExtMultimodeV1" before using the multimode API (ND_ETEL.CPP).
+        static constexpr std::uint32_t ETEL_EXT_MULTIMODE_V1 = 3000;
+        phone_info.exts_ = kern->is_eka1() ? ETEL_EXT_MULTIMODE_V1 : 0;
         phone_info.network_ = epoc::etel_network_type_mobile_digital;
 
         static constexpr const char16_t *LEGACY_TSY_PHONE_NAME = u"Calypso";

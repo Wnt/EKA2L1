@@ -3536,7 +3536,7 @@ namespace eka2l1::epoc {
     BRIDGE_FUNC(std::int32_t, user_svr_hal_get, const std::uint32_t function, void *param) {
         const std::int32_t result = do_hal_by_data_num(kern->get_system(), function, param);
 
-        if ((result < 0) && kern->get_config()->log_ipc) {
+        if (kern->get_config()->log_ipc) {
             kernel::thread *crr_thread = kern->crr_thread();
             LOG_INFO(KERNEL, "HAL get {} returned {} for {}", function, result, crr_thread ? crr_thread->name() : std::string("?"));
         }
