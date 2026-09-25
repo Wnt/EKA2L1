@@ -22,6 +22,7 @@
  */
 
 #include <algorithm>
+#include <cstdlib>
 #include <kernel/chunk.h>
 #include <kernel/kernel.h>
 #include <kernel/libmanager.h>
@@ -57,6 +58,15 @@ namespace eka2l1 {
             }
 
             return "!Fontbitmapserver";
+        }
+
+        bool rom_fbs_enabled(const epocver ver) {
+            return ver == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV")
+                && std::getenv("EKA2L1_ROM_FBS");
+        }
+
+        std::string get_host_fbs_server_name_by_epocver(const epocver ver) {
+            return rom_fbs_enabled(ver) ? "EKA2L1HostFbs" : get_fbs_server_name_by_epocver(ver);
         }
 
         void query_fbs_feature_support(fbs_server *fbss, bool &support_current_display_mode, bool &support_dirty_bitmap) {
@@ -335,7 +345,7 @@ namespace eka2l1 {
     }
 
     fbs_server::fbs_server(eka2l1::system *sys)
-        : service::typical_server(sys, epoc::get_fbs_server_name_by_epocver(sys->get_symbian_version_use()))
+        : service::typical_server(sys, epoc::get_host_fbs_server_name_by_epocver(sys->get_symbian_version_use()))
         , persistent_font_store(sys->get_io_system())
         , shared_chunk(nullptr)
         , large_chunk(nullptr)
@@ -374,12 +384,13 @@ namespace eka2l1 {
     }
 
     void fbs_server::initialize_server() {
+        const bool host_only = epoc::rom_fbs_enabled(kern->get_epoc_version());
         // Initialize those chunks
         shared_chunk = kern->create_and_add<kernel::chunk>(
                                kernel::owner_type::kernel,
                                kern->get_memory_system(),
                                nullptr,
-                               "FbsSharedChunk",
+                               host_only ? "EKA2L1HostFbsSharedChunk" : "FbsSharedChunk",
                                0,
                                0x10000,
                                (kern->is_eka1() ? 0x600000 : 0x200000),
@@ -393,7 +404,7 @@ namespace eka2l1 {
                               kernel::owner_type::kernel,
                               kern->get_memory_system(),
                               nullptr,
-                              "FbsLargeChunk",
+                              host_only ? "EKA2L1HostFbsLargeChunk" : "FbsLargeChunk",
                               0,
                               0,
                               (kern->get_epoc_version() >= epocver::epoc95) ? 0x08000000 : 0x06000000,
@@ -410,7 +421,7 @@ namespace eka2l1 {
 
         if (kern->is_eka1()) {
             large_bitmap_access_mutex = reinterpret_cast<mutex_ptr>(kern->create<kernel::legacy::mutex>(
-                "FbsLargeBitmapAccess", kernel::access_type::global_access));
+                host_only ? "EKA2L1HostFbsLargeBitmapAccess" : "FbsLargeBitmapAccess", kernel::access_type::global_access));
         } else {
             large_bitmap_access_mutex = kern->create<kernel::mutex>(kern->get_ntimer(),
                 nullptr, "FbsLargeBitmapAccess", false, kernel::access_type::global_access);

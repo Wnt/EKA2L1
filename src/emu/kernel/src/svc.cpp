@@ -2380,7 +2380,7 @@ namespace eka2l1::epoc {
     }
 
     BRIDGE_FUNC(std::int32_t, user_svr_rom_root_dir_address) {
-        return kern->get_rom_info()->header.rom_root_dir_list;
+        return kern->get_memory_system()->rom_root_directory(kern->get_rom_info()->header.rom_root_dir_list);
     }
 
     /************************/
@@ -4522,6 +4522,28 @@ namespace eka2l1::epoc {
 
     static const char *NAMESPACE_FULL_MARKER = "::";
 
+    std::int32_t process_open_by_name_eka1(kernel_system *kern, const std::uint32_t attribute, epoc::eka1_executor *create_info,
+        epoc::request_status *finish_signal, kernel::thread *target_thread) {
+        auto *owner = target_thread->owning_process();
+        auto *name = eka2l1::ptr<epoc::desc16>(create_info->arg1_).get(owner);
+        if (!name) {
+            finish_status_request_eka1(target_thread, finish_signal, epoc::error_argument);
+            return epoc::error_argument;
+        }
+        auto *process = kern->get_by_name_and_type<kernel::process>(
+            common::ucs2_to_utf8(name->to_std_string(owner)), kernel::object_type::process);
+        if (!process) {
+            finish_status_request_eka1(target_thread, finish_signal, epoc::error_not_found);
+            return epoc::error_not_found;
+        }
+        const auto handle = kern->open_handle(process, get_handle_owner_from_eka1_attribute(attribute));
+        if (handle == kernel::INVALID_HANDLE) {
+            finish_status_request_eka1(target_thread, finish_signal, epoc::error_no_memory);
+            return epoc::error_no_memory;
+        }
+        return do_handle_write(kern, create_info, finish_signal, target_thread, handle);
+    }
+
     std::int32_t process_open_by_id_eka1(kernel_system *kern, const std::uint32_t attribute, epoc::eka1_executor *create_info,
         epoc::request_status *finish_signal, kernel::thread *target_thread) {
         kernel::process *pr = kern->get_by_id<kernel::process>(create_info->arg1_);
@@ -5434,6 +5456,9 @@ namespace eka2l1::epoc {
 
             case epoc::eka1_executor::execute_v80_open_process_by_id:
                 return process_open_by_id_eka1(kern, attribute, create_info, finish_signal, crr_thread);
+
+            case 0x1E: // EKA1 7.0s RProcess::Open(const TDesC&, TOwnerType)
+                return process_open_by_name_eka1(kern, attribute, create_info, finish_signal, crr_thread);
 
             case epoc::eka1_executor::execute_v80_rename_process:
                 return process_rename_eka1(kern, attribute, create_info, finish_signal, crr_thread);

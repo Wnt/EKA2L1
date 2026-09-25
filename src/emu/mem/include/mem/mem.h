@@ -20,6 +20,7 @@
 #pragma once
 
 #include <mem/common.h>
+#include <mem/chunk.h>
 #include <mem/control.h>
 #include <mem/mmu.h>
 #include <mem/page.h>
@@ -27,6 +28,10 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include <map>
+#include <mutex>
+#include <string>
+#include <vector>
 
 namespace eka2l1 {
     class system;
@@ -55,11 +60,21 @@ namespace eka2l1 {
         mem::control_impl impl_;
         mem::page_table_allocator_impl alloc_;
 
-        void *rom_map_;
-        std::size_t rom_size_;
+        void *rom_map_{};
+        std::size_t rom_size_{};
 
-        mem::vm_address rom_addr_;
+        mem::vm_address rom_addr_{};
         config::state *conf_;
+
+        struct rom_data_block {
+            std::vector<std::uint8_t> bytes;
+            mem::mem_model_chunk_impl chunk;
+            std::size_t used{};
+        };
+        std::vector<std::unique_ptr<rom_data_block>> rom_data_blocks_;
+        std::map<std::u16string, address> rom_data_addresses_;
+        std::mutex rom_data_mutex_;
+        address extension_rom_root_{};
 
     public:
         explicit memory_system(arm::exclusive_monitor *monitor, config::state *conf,
@@ -74,6 +89,10 @@ namespace eka2l1 {
         mem::mem_model_type get_model_type() const {
             return impl_->model_type();
         }
+
+        // Immutable extracted ROM data survives file handles and all guest processes.
+        address map_rom_data(const std::u16string &key, const std::vector<std::uint8_t> &bytes, address original_root = 0);
+        address rom_root_directory(address original) const { return extension_rom_root_ ? extension_rom_root_ : original; }
 
         mem::mmu_base *get_mmu(arm::core *cc);
         const int get_page_size() const;

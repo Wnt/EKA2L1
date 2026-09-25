@@ -718,7 +718,12 @@ namespace eka2l1::dispatch {
 
         // Try to grab the bitwise bitmap
         kernel_system *kern = sys->get_kernel_system();
-        fbs_server *fbss = kern->get_by_name<fbs_server>(epoc::get_fbs_server_name_by_epocver(kern->get_epoc_version()));
+        if (epoc::rom_fbs_enabled(kern->get_epoc_version())) {
+            // ROM bitmap offsets are relative to the guest FBS heaps, not our host heaps.
+            egl_push_error(sys, EGL_BAD_NATIVE_PIXMAP_EMU);
+            return EGL_FALSE;
+        }
+        fbs_server *fbss = kern->get_by_name<fbs_server>(epoc::get_host_fbs_server_name_by_epocver(kern->get_epoc_version()));
 
         utils::fbs_bitmap *guest_bmp_ptr = reinterpret_cast<utils::fbs_bitmap*>(native_pixmap);
         epoc::bitwise_bitmap *bbmp = guest_bmp_ptr->bitwise_bitmap_addr_.cast<epoc::bitwise_bitmap>().get(kern->crr_process());

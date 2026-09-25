@@ -17,6 +17,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <cstdlib>
 #include <services/window/classes/dsa.h>
 #include <services/window/classes/plugins/animdll.h>
 #include <services/window/classes/winbase.h>
@@ -320,7 +321,13 @@ namespace eka2l1::epoc {
             builder.draw_bitmap(dsa_texture, 0, dest_rect, source_rect, eka2l1::vec2(0, 0), rotation_draw, 0);
         };
 
-        if (direct_framebuffer_mapped) {
+        // In ROM-wserv mode the ARM server owns the entire panel. The DSA
+        // observer only detects changed rows: an all-white clear can equal the
+        // initial buffer and never be marked written. Using that mask leaves
+        // black bands in the host texture between the first glyphs/bitmaps.
+        const bool rom_wserv = kern->get_epoc_version() == epocver::epoc7
+            && std::getenv("EKA2L1_ROM_WSERV");
+        if (direct_framebuffer_mapped && !rom_wserv) {
             const auto &rows = direct_framebuffer.written_rows();
             for (int y = 0; y < static_cast<int>(rows.size());) {
                 if (!rows[y]) {

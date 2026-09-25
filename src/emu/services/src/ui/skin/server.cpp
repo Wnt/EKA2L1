@@ -230,7 +230,7 @@ namespace eka2l1 {
             sys->get_device_manager(), sys->get_io_system(), sys->get_system_language());
 
         fbss = reinterpret_cast<fbs_server *>(&(*kern->get_by_name<service::server>(
-            epoc::get_fbs_server_name_by_epocver(kern->get_epoc_version()))));
+            epoc::get_host_fbs_server_name_by_epocver(kern->get_epoc_version()))));
 
         // Create skin chunk
         skin_chunk_ = kern->create_and_add<kernel::chunk>(kernel::owner_type::kernel,

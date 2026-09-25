@@ -7,9 +7,12 @@ set(CORE_TEST_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/mem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vfs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernel/ipc_arg.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernel/rendezvous.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernel/raw_event.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernel/timer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/vfs/rom_wserv.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/vfs/rom_assets.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/services/applist/rom_icons.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernel/locale.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/loader/e32img.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/loader/gdr.cpp
@@ -28,6 +31,8 @@ set(CORE_TEST_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/services/applist/recognize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/applist/data_type.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/applist/icon_by_uid.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/rom_mode.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/glyph_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/bitmap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/fontmatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/gdrmetrics.cpp

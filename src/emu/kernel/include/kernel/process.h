@@ -26,6 +26,7 @@
 #include <kernel/kernel_obj.h>
 #include <kernel/mutex.h>
 #include <kernel/object_ix.h>
+#include <kernel/rendezvous.h>
 #include <kernel/thread.h>
 #include <mem/process.h>
 #include <utils/reqsts.h>
@@ -188,6 +189,7 @@ namespace eka2l1::kernel {
         // увеличения эмоций.
         common::identity_container<process_uid_type_change_callback_elem> uid_change_callbacks;
         common::identity_container<process_logon_callback> logon_requests_emu;
+        rendezvous_callbacks rendezvous_requests_emu;
 
     protected:
         thread_ptr primary_thread;
@@ -232,6 +234,8 @@ namespace eka2l1::kernel {
         void logon_cancel(const std::size_t handle);
 
         void rendezvous(int rendezvous_reason);
+        // Host bootstrap counterpart of RProcess::Rendezvous. Arm before run().
+        void rendezvous(std::function<void(int)> callback);
 
         void finish_logons();
 

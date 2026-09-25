@@ -19,6 +19,7 @@
  */
 
 #include <vfs/rom_wserv.h>
+#include <vfs/rom_assets.h>
 #include <cstdlib>
 #include <common/algorithm.h>
 #include <common/cvt.h>
@@ -1143,6 +1144,28 @@ namespace eka2l1 {
 
             // Dont change order!
             if (!entry || (ff && (mode & PREFER_PHYSICAL) && (ff->size() != entry->size))) {
+                // Extracted EKA1 ROM bitmap stores contain in-memory CBitwiseBitmap
+                // objects, not disk SBM headers. All file APIs must see one immutable
+                // ROM backing, including clients retaining pointers after RFile::Close.
+                const auto ext = common::lowercase_ucs2_string(eka2l1::path_extension(new_path));
+                if (!entry && ff && mem && ver == epocver::epoc7
+                    && std::getenv("EKA2L1_ROM_WSERV") && std::getenv("EKA2L1_ROM_FBS")
+                    && (ext == u".aif" || ext == u".mbm") && ff->size() <= 0x10000000) {
+                    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(ff->size()));
+                    if (ff->read_file(bytes.data(), 1, static_cast<std::uint32_t>(bytes.size())) == bytes.size()
+                        && contains_rom_bitmap_store(bytes)) {
+                        const address mapped = mem->map_rom_data(common::lowercase_ucs2_string(new_path), bytes, rom_cache->header.rom_root_dir_list);
+                        if (mapped) {
+                            loader::rom_entry mapped_entry{};
+                            mapped_entry.address_lin = mapped;
+                            mapped_entry.size = static_cast<std::uint32_t>(bytes.size());
+                            mapped_entry.attrib = 1;
+                            LOG_TRACE(VFS, "Mapped extracted ROM bitmap asset {} at 0x{:X}", common::ucs2_to_utf8(path), mapped);
+                            return std::make_unique<rom_file>(mem, rom_cache, mapped_entry, path);
+                        }
+                    }
+                    ff->seek(0, file_seek_mode::beg);
+                }
                 return ff;
             }
 

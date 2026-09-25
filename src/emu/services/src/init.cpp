@@ -611,7 +611,9 @@ namespace eka2l1 {
             if (sys->get_symbian_version_use() == epocver::epoc93fp1) {
                 CREATE_SERVER(sys, akn_icon_server);
             }
-            CREATE_SERVER(sys, akn_skin_server);
+            if (!epoc::rom_fbs_enabled(sys->get_symbian_version_use())) {
+                CREATE_SERVER(sys, akn_skin_server);
+            }
 
             CREATE_SERVER(sys, system_agent_server);
 
@@ -676,9 +678,9 @@ namespace eka2l1 {
             // Lazy initialization on Connect was too late for a non-GUI executable:
             // it started ROM fbserv, mapped that heap, then connected to HLE FBS and
             // interpreted our offsets against the other heap. Publish the HLE heaps
-            // before any guest runs.
+            // before any guest runs (private names when ROM FBS is selected).
             if (kern->is_eka1()) {
-                auto *fbs = kern->get_by_name<fbs_server>(epoc::get_fbs_server_name_by_epocver(kern->get_epoc_version()));
+                auto *fbs = kern->get_by_name<fbs_server>(epoc::get_host_fbs_server_name_by_epocver(kern->get_epoc_version()));
                 if (fbs) {
                     fbs->ensure_initialized();
                 }
@@ -707,9 +709,14 @@ namespace eka2l1 {
 
             // EKA2L1_ROM_WSERV is a default-off EKA1/S80 feasibility experiment. The
             // host window object is only a display adapter in this mode; ewsrv owns
-            // Windowserver. Keep HLE FBS for the first experiment.
-            if (sys->get_symbian_version_use() == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV")) {
+            // Windowserver. In full ROM mode, FBS readiness gates its launch.
+            const bool rom_fbs = epoc::rom_fbs_enabled(sys->get_symbian_version_use());
+            if (!rom_fbs && sys->get_symbian_version_use() == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV")) {
                 list = "Z:\\System\\Libs\\ewsrv.exe;" + list;
+            }
+            if (epoc::rom_fbs_enabled(sys->get_symbian_version_use())) {
+                list = "Z:\\System\\Libs\\fbserv.exe;" + list;
+                LOG_INFO(SERVICE_FBS, "ROM FBS: ARM server owns Fontbitmapserver; host launcher icons are private");
             }
 
             std::size_t start = 0;
@@ -737,6 +744,23 @@ namespace eka2l1 {
                     continue;
                 }
 
+                if (rom_fbs && common::compare_ignore_case(path.c_str(), "Z:\\System\\Libs\\fbserv.exe") == 0) {
+                    // Wserv assumes FBS is already listening. Merely scheduling both processes
+                    // lets the higher-priority Wserv reach Connect before FBS registers.
+                    pr->rendezvous([kern](int result) {
+                        if (result != epoc::error_none || kern->wipeout_in_progress()) {
+                            LOG_ERROR(SERVICE_FBS, "ROM FBS startup failed: {}; wserv not started", result);
+                            return;
+                        }
+                        kernel::process *ws = kern->spawn_new_process(u"Z:\\System\\Libs\\ewsrv.exe");
+                        if (ws) {
+                            ws->run();
+                            LOG_INFO(SERVICE_FBS, "ROM FBS ready; started ROM window server");
+                        } else {
+                            LOG_ERROR(SERVICE_FBS, "ROM FBS ready but ewsrv could not be loaded");
+                        }
+                    });
+                }
                 pr->run();
                 LOG_INFO(KERNEL, "Prestart: launched {}", path);
             }

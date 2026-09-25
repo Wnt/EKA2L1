@@ -225,7 +225,7 @@ namespace eka2l1 {
             const std::lock_guard<std::mutex> guard(list_access_mut_);
 
             if (!read_icon_data_aif(reinterpret_cast<common::ro_stream *>(&std_rsc_raw), fbsserv, reg.app_icons,
-                                    romaddr)) {
+                                    romaddr, epoc::rom_fbs_enabled(kern->get_epoc_version()))) {
                 return false;
             }
         }
@@ -608,7 +608,7 @@ namespace eka2l1 {
 
     void applist_server::init() {
         fbsserv = reinterpret_cast<fbs_server *>(kern->get_by_name<service::server>(
-            epoc::get_fbs_server_name_by_epocver(kern->get_epoc_version())));
+            epoc::get_host_fbs_server_name_by_epocver(kern->get_epoc_version())));
 
         fsserv = kern->get_by_name<eka2l1::fs_server>(epoc::fs::get_server_name_through_epocver(
             kern->get_epoc_version()));
@@ -898,6 +898,12 @@ namespace eka2l1 {
         const std::size_t pair = applist_icon_pair_for_int_request(reg->app_icons.size() / 2, request.value(),
             [&](const std::int32_t side) { return pick_icon_pair_by_size(*reg, eka2l1::vec2(side, side)); });
 
+        if (epoc::rom_fbs_enabled(kern->get_epoc_version())
+            && (!reg->app_icons[pair * 2].bmp_rom_addr_ || !reg->app_icons[pair * 2 + 1].bmp_rom_addr_)) {
+            // Disk-format icons still need an ARM FBS IPC bridge.
+            ctx.complete(epoc::error_not_found);
+            return;
+        }
         const app_icon_handles handle_result = icon_pair_handles(*reg, pair);
         LOG_TRACE(SERVICE_APPLIST, "AppIconByUid 0x{:X} asked {}: pair {} of {}", app_uid.value(), request.value(), pair,
             reg->app_icons.size() / 2);
@@ -951,6 +957,12 @@ namespace eka2l1 {
                 chosen ? chosen->first->header_.size_pixels.y : -1);
         }
 
+        if (epoc::rom_fbs_enabled(kern->get_epoc_version())
+            && (!reg->app_icons[pair * 2].bmp_rom_addr_ || !reg->app_icons[pair * 2 + 1].bmp_rom_addr_)) {
+            // Disk-format icons still need an ARM FBS IPC bridge.
+            ctx.complete(epoc::error_not_found);
+            return;
+        }
         const app_icon_handles handle_result = icon_pair_handles(*reg, pair);
 
         if (legacy_level() == APA_LEGACY_LEVEL_OLD) {
@@ -1899,7 +1911,28 @@ namespace eka2l1 {
             pr->set_uid_type(current_uid_type);
         }
 
-        // Add it into our app running list
+        // Eikon connects to FBS before Windowserver. Host launch requests can
+        // arrive while the prestarted ROM FBS is still scanning its font store.
+        if (epoc::rom_fbs_enabled(kern->get_epoc_version())
+            && !kern->get_by_name<service::server>("Fontbitmapserver")) {
+            for (const auto &object : kern->get_process_list()) {
+                auto *fbs = static_cast<kernel::process *>(object.get());
+                if (common::compare_ignore_case(fbs->get_exe_path(), std::u16string(u"Z:\\System\\Libs\\fbserv.exe")) == 0
+                    && fbs->get_exit_type() == kernel::entity_exit_type::pending) {
+                    const auto pending_id = pr->unique_id();
+                    auto *kernel = kern;
+                    fbs->rendezvous([kernel, pending_id](int result) {
+                        if (kernel->wipeout_in_progress()) return;
+                        auto *pending = kernel->get_by_id<kernel::process>(pending_id);
+                        if (!pending || pending->get_exit_type() != kernel::entity_exit_type::pending) return;
+                        if (result == epoc::error_none) pending->run();
+                        else pending->kill(kernel::entity_exit_type::terminate, u"FBS startup", result);
+                    });
+                    LOG_INFO(SERVICE_APPLIST, "Application launch waits for ROM FBS readiness");
+                    return true;
+                }
+            }
+        }
         return pr->run();
     }
 
