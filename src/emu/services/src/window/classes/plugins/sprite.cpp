@@ -37,6 +37,59 @@ namespace eka2l1::epoc {
             break;
         }
 
+        case ws_sprite_set_position: {
+            if (cmd.header.cmd_len < sizeof(eka2l1::vec2)) {
+                ctx.complete(epoc::error_argument);
+                break;
+            }
+
+            position = *reinterpret_cast<eka2l1::vec2 *>(cmd.data_ptr);
+            ctx.complete(epoc::error_none);
+            break;
+        }
+
+        case ws_sprite_append_member: {
+            if (cmd.header.cmd_len < sizeof(ws_cmd_sprite_member)) {
+                ctx.complete(epoc::error_argument);
+                break;
+            }
+
+            members.push_back(*reinterpret_cast<ws_cmd_sprite_member *>(cmd.data_ptr));
+            ctx.complete(epoc::error_none);
+            break;
+        }
+
+        case ws_sprite_update_member:
+        case ws_sprite_update_member2: {
+            // UpdateMember only asks for a repaint of the given frame; UpdateMember2 also replaces it.
+            if (cmd.header.cmd_len < ((op == ws_sprite_update_member2) ? sizeof(ws_cmd_sprite_update_member) : sizeof(std::int32_t))) {
+                ctx.complete(epoc::error_argument);
+                break;
+            }
+
+            ws_cmd_sprite_update_member *update = reinterpret_cast<ws_cmd_sprite_update_member *>(cmd.data_ptr);
+
+            if ((update->index < 0) || (static_cast<std::size_t>(update->index) >= members.size())) {
+                ctx.complete(epoc::error_argument);
+                break;
+            }
+
+            if (op == ws_sprite_update_member2) {
+                members[update->index] = update->member;
+            }
+
+            ctx.complete(epoc::error_none);
+            break;
+        }
+
+        case ws_sprite_activate: {
+            // CWsSpriteBase::CompleteL panics a client that activates a sprite without members; such a
+            // sprite simply stays inactive here.
+            active = !members.empty();
+            ctx.complete(epoc::error_none);
+            break;
+        }
+
         default: {
             // The number of unimplemented is too small, better just complete all
             LOG_ERROR(SERVICE_WINDOW, "Unimplemented SpriteDLL opcode: 0x{:x}", cmd.header.op);

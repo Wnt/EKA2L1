@@ -22,14 +22,37 @@
 
 #include <services/window/classes/wsobj.h>
 
+#include <cstdint>
+#include <vector>
+
 namespace eka2l1::epoc {
     struct window;
     struct screen;
 
-    // Is this a 2D game engine ?
+    // TCmdSpriteMember (w32cmd.h): one frame of a sprite or pointer cursor.
+    struct ws_cmd_sprite_member {
+        std::uint32_t bitmap_handle;
+        std::uint32_t mask_handle;
+        std::int32_t invert_mask;
+        std::uint32_t draw_mode;
+        eka2l1::vec2 offset;
+        std::int32_t interval;
+    };
+
+    // TWsSpriteCmdUpdateMember: the member index, then the new member.
+    struct ws_cmd_sprite_update_member {
+        std::int32_t index;
+        ws_cmd_sprite_member member;
+    };
+
+    // A sprite or a pointer cursor (CWsSpriteBase). The members and state are kept as the client set
+    // them; neither kind is drawn by this server yet (the host pointer stands in for pointer cursors).
     struct sprite : public window_client_obj {
         window *attached_window;
         eka2l1::vec2 position;
+
+        std::vector<ws_cmd_sprite_member> members;
+        bool active = false;
 
         bool execute_command(service::ipc_context &context, ws_cmd &cmd) override;
         explicit sprite(window_server_client_ptr client, screen *scr, window *attached_window = nullptr,
