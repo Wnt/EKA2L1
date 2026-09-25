@@ -352,7 +352,10 @@ namespace eka2l1::epoc {
         if (visible_region.empty()) {
             visi_change_evt.win_visibility_change_evt_.flags_ = epoc::window_visiblity_changed_event::not_visible;
         } else {
-            if (((flags & flag_shape_region) && (visible_region.identical(shape_region))) ||
+            common::region full_shape = shape_region;
+            full_shape.clip(abs_rect);
+
+            if (((flags & flag_shape_region) && (visible_region.identical(full_shape))) ||
                 (((flags & flag_shape_region) == 0) && (visible_region.rects_.size() == 1) && (visible_region.rects_[0] == bounding_rect()))) {
                 visi_change_evt.win_visibility_change_evt_.flags_ = (epoc::window_visiblity_changed_event::partially_visible | epoc::window_visiblity_changed_event::fully_visible);
             } else {
@@ -558,6 +561,7 @@ namespace eka2l1::epoc {
             common::region onscreen_region;
             if (flags & flag_shape_region) {
                 onscreen_region = shape_region;
+                onscreen_region.clip(abs_rect);
             } else {
                 onscreen_region.add_rect(abs_rect);
             }
