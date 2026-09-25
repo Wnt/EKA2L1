@@ -1316,6 +1316,9 @@ namespace eka2l1 {
 
         // Start the bootload
         kern_->start_bootload();
+
+        // ROM executables the ROM's Starter would have running before any app (EKA2L1_PRESTART).
+        service::start_prestart_processes(parent_);
     }
 
     void system_impl::request_exit() {

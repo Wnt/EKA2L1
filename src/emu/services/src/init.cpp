@@ -19,6 +19,7 @@
  */
 
 #include <common/algorithm.h>
+#include <common/cvt.h>
 #include <common/path.h>
 #include <common/platform.h>
 
@@ -434,6 +435,49 @@ namespace eka2l1 {
         
         void init_services_post_bootup(system *sys) {
             epoc::sms::supply_sim_settings(sys);
+        }
+
+        // EKA2L1_PRESTART="<path>[;<path>...]" starts ROM executables at boot, before any --run app, the
+        // way the ROM's Starter would. With EKA2L1_ROM_EIKSRV on a Series 80 device the default is the one
+        // server Starter brings up before HandleStartEikon that the Eikon server cannot construct
+        // without: SecurityServer.exe (EikSrvUi connects to it while constructing; without it the
+        // construction fails and EikSrv dies with USER 44). EKA2L1_PRESTART= (empty) starts nothing.
+        void start_prestart_processes(system *sys) {
+            kernel_system *kern = sys->get_kernel_system();
+            if (!kern) {
+                return;
+            }
+
+            std::string list;
+            if (const char *env = std::getenv("EKA2L1_PRESTART")) {
+                list = env;
+            } else if (std::getenv("EKA2L1_ROM_EIKSRV") && kern->is_eka1() && sys->is_s80_device_active()) {
+                list = "Z:\\System\\Programs\\SecurityServer.exe";
+            }
+
+            std::size_t start = 0;
+            while (start < list.size()) {
+                std::size_t end = list.find(';', start);
+                if (end == std::string::npos) {
+                    end = list.size();
+                }
+
+                const std::string path = list.substr(start, end - start);
+                start = end + 1;
+
+                if (path.empty()) {
+                    continue;
+                }
+
+                kernel::process *pr = kern->spawn_new_process(common::utf8_to_ucs2(path));
+                if (!pr) {
+                    LOG_ERROR(KERNEL, "Prestart: unable to launch {}", path);
+                    continue;
+                }
+
+                pr->run();
+                LOG_INFO(KERNEL, "Prestart: launched {}", path);
+            }
         }
     }
 }
