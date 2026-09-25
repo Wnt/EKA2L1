@@ -25,7 +25,9 @@
 #include <drivers/graphics/common.h>
 
 #include <cstdint>
+#include <functional>
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -131,5 +133,73 @@ namespace eka2l1::epoc {
 
         void draw(drivers::graphics_command_builder &builder, screen *scr, const layout_kind kind,
             const common::region &visible);
+    };
+
+    /**
+     * \brief A system note (RNotifier::Notify) drawn by the window server when the Eikon server is the HLE one.
+     *
+     * On the device the notifier server lives inside the ROM Eikon server, which puts up a dialog: a skinned
+     * title bar with the first line, the second line in the body, and the buttons on the command button
+     * array; the user dismisses it with a command button, Enter or Esc. With the HLE Eikon server nobody
+     * drew it (the desktop frontend opened a host message box, the kiosk answered it unseen). This stands in:
+     * the window server paints the note over every window and takes the key presses until it is answered.
+     *
+     * Geometry and colours are the ROM Eikon server's own note ("Program closed", EKA2L1_ROM_EIKSRV=1): a
+     * 3-pixel frame (66,65,74 / 140,138,156 / 214,211,222), the skin's dialog title bar
+     * (skindialogframe.mbm #8), a white body, centred on the screen right of the narrow status strip.
+     */
+    class s80_note {
+    public:
+        using completion = std::function<void(int)>;
+
+    private:
+        window_server *serv_;
+
+        std::mutex lock_;
+        bool active_ = false;
+        std::u16string title_;
+        std::u16string text_;
+        std::u16string button1_;
+        std::u16string button2_;
+        completion done_;
+
+        drivers::handle title_bg_ = 0;
+        eka2l1::vec2 title_bg_size_{ 0, 0 };
+        bool title_bg_tried_ = false;
+        bool fonts_logged_ = false;
+
+        fbsfont *find_font(const bool bold, const std::int32_t design_height);
+        void draw_text(drivers::graphics_command_builder &builder, screen *scr, fbsfont *font, const std::u16string &text,
+            const eka2l1::rect &box, const std::uint32_t alignment, const eka2l1::vec4 &colour);
+        void schedule_redraw();
+
+    public:
+        explicit s80_note(window_server *serv);
+
+        /**
+         * \brief Put a note up. Returns false if one is already showing.
+         * \param done Called with the button answered (0 = first, 1 = second), without the kernel lock held.
+         */
+        bool show(const std::u16string &title, const std::u16string &text, const std::u16string &button1,
+            const std::u16string &button2, completion done);
+
+        bool active();
+
+        /**
+         * \brief A key press from the frontend while the note is up. Returns true if the note took it.
+         * \param host_key The host key code (drivers HOST_KEY_*, or the character).
+         */
+        bool handle_key_press(const std::uint32_t host_key);
+
+        void answer(const int button);
+
+        void draw(drivers::graphics_command_builder &builder, screen *scr);
+
+        static eka2l1::rect rect();
+
+        /**
+         * \brief Split a note's first line into the title and the body, as the ROM alert shows them.
+         */
+        static void split_title(std::u16string &title, std::u16string &text);
     };
 }

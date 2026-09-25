@@ -24,6 +24,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -487,6 +488,7 @@ namespace eka2l1 {
 
         // Series 80 v2 status pane stand-in for the HLE Eikon server (s80pane.h); made on the first layout.
         std::unique_ptr<epoc::s80_status_pane> s80_status_pane_;
+        std::unique_ptr<epoc::s80_note> s80_note_;
 
         // Series 80 v2 shell: the hardware application buttons (see s80_handle_app_key in window.cpp).
         int s80_app_key_evt_{ -1 };
@@ -522,6 +524,13 @@ namespace eka2l1 {
          * \brief A Series 80 application set its status pane layout (EikSrv op 7) with the HLE Eikon server.
          */
         void s80_set_status_pane_layout(kernel::process *pr, const std::uint32_t layout_res);
+
+        /**
+         * \brief Put up a Series 80 system note (RNotifier::Notify with the HLE Eikon server). Called with the
+         * kernel lock held. Returns false if a note is already up.
+         */
+        bool s80_show_note(const std::u16string &title, const std::u16string &text, const std::u16string &button1,
+            const std::u16string &button2, std::function<void(int)> done);
 
         epoc::ws::uid next_uid() {
             return ++obj_uid;

@@ -295,23 +295,14 @@ namespace eka2l1::epoc {
         return nullptr;
     }
 
-    bool s80_status_pane::load_image(drivers::graphics_driver *driver, image &img, const std::u16string &path,
-        const int index, const bool key_magenta) {
-        if (img.handle_) {
-            return true;
-        }
-
-        if (img.tried_) {
-            return false;
-        }
-
-        img.tried_ = true;
-
-        io_system *io = serv_->get_system()->get_io_system();
+    // Decode a skin bitmap into a driver bitmap (BGRA; the skin's magenta key colour made transparent on request).
+    static bool load_skin_bitmap(window_server *serv, drivers::graphics_driver *driver, drivers::handle &handle,
+        eka2l1::vec2 &out_size, const std::u16string &path, const int index, const bool key_magenta) {
+        io_system *io = serv->get_system()->get_io_system();
         symfile f = io ? io->open_file(path, READ_MODE | BIN_MODE) : nullptr;
 
         if (!f) {
-            LOG_WARN(SERVICE_WINDOW, "Series 80 status pane: cannot open {}", common::ucs2_to_utf8(path));
+            LOG_WARN(SERVICE_WINDOW, "Series 80 skin: cannot open {}", common::ucs2_to_utf8(path));
             return false;
         }
 
@@ -319,7 +310,7 @@ namespace eka2l1::epoc {
         loader::mbm_file parser(reinterpret_cast<common::ro_stream *>(&stream));
 
         if (!parser.do_read_headers() || (index >= static_cast<int>(parser.sbm_headers.size()))) {
-            LOG_WARN(SERVICE_WINDOW, "Series 80 status pane: no bitmap {} in {}", index, common::ucs2_to_utf8(path));
+            LOG_WARN(SERVICE_WINDOW, "Series 80 skin: no bitmap {} in {}", index, common::ucs2_to_utf8(path));
             return false;
         }
 
@@ -331,8 +322,8 @@ namespace eka2l1::epoc {
         std::vector<std::uint8_t> pixels(static_cast<std::size_t>(size.x) * size.y * 4);
         common::wo_buf_stream dest(pixels.data(), pixels.size());
 
-        if (!convert_to_rgba8888(serv_->get_fbs_server(), parser, index, dest)) {
-            LOG_WARN(SERVICE_WINDOW, "Series 80 status pane: bitmap {} of {} does not decode", index, common::ucs2_to_utf8(path));
+        if (!convert_to_rgba8888(serv->get_fbs_server(), parser, index, dest)) {
+            LOG_WARN(SERVICE_WINDOW, "Series 80 skin: bitmap {} of {} does not decode", index, common::ucs2_to_utf8(path));
             return false;
         }
 
@@ -348,19 +339,33 @@ namespace eka2l1::epoc {
             pixels[i + 3] = (key_magenta && (r >= 0xF8) && (g <= 0x04) && (b >= 0xF8)) ? 0 : 0xFF;
         }
 
-        img.handle_ = drivers::create_bitmap(driver, size, 32);
-        if (!img.handle_) {
+        handle = drivers::create_bitmap(driver, size, 32);
+        if (!handle) {
             return false;
         }
 
         drivers::graphics_command_builder builder;
-        builder.update_bitmap(img.handle_, reinterpret_cast<const char *>(pixels.data()), pixels.size(), { 0, 0 }, size);
+        builder.update_bitmap(handle, reinterpret_cast<const char *>(pixels.data()), pixels.size(), { 0, 0 }, size);
 
         drivers::command_list list = builder.retrieve_command_list();
         driver->submit_command_list(list);
 
-        img.size_ = size;
+        out_size = size;
         return true;
+    }
+
+    bool s80_status_pane::load_image(drivers::graphics_driver *driver, image &img, const std::u16string &path,
+        const int index, const bool key_magenta) {
+        if (img.handle_) {
+            return true;
+        }
+
+        if (img.tried_) {
+            return false;
+        }
+
+        img.tried_ = true;
+        return load_skin_bitmap(serv_, driver, img.handle_, img.size_, path, index, key_magenta);
     }
 
     void s80_status_pane::draw(drivers::graphics_command_builder &builder, screen *scr, const layout_kind kind,
@@ -414,6 +419,443 @@ namespace eka2l1::epoc {
 
         if (kind == layout_wide) {
             draw_clock(builder, scr, visible);
+        }
+
+        builder.set_feature(drivers::graphics_feature::blend, false);
+        builder.set_feature(drivers::graphics_feature::clipping, false);
+        builder.set_feature(drivers::graphics_feature::stencil_test, false);
+    }
+}
+
+namespace eka2l1::epoc {
+    // The ROM Eikon server's note (EKA2L1_ROM_EIKSRV=1, "Program closed"), measured at 1x: centred on the
+    // screen right of the narrow status strip (32..555), a 3-pixel frame, a 27-pixel skinned title bar.
+    static const char16_t *SKIN_DIALOG_FRAME = u"Z:\\System\\Data\\skinerin\\skindialogframe.mbm";
+    static constexpr int SKIN_DIALOG_TITLE = 8;
+
+    static constexpr std::int32_t NOTE_AREA_LEFT = 32;
+    static constexpr std::int32_t NOTE_AREA_RIGHT = 555;
+    static constexpr std::int32_t NOTE_WIDTH = 300;
+    static constexpr std::int32_t NOTE_FRAME = 3;
+    static constexpr std::int32_t NOTE_TITLE_HEIGHT = 27;
+    static constexpr std::int32_t NOTE_LINE_HEIGHT = 20;
+    static constexpr std::int32_t NOTE_TEXT_MARGIN = 10;
+    static constexpr std::int32_t NOTE_MAX_LINES = 4;
+
+    // The command button array right of the application area: four 50-pixel slots.
+    static constexpr std::int32_t CBA_LEFT = 555;
+    static constexpr std::int32_t CBA_WIDTH = 85;
+    static constexpr std::int32_t CBA_TOP_BAND = 6;
+    static constexpr std::int32_t CBA_SLOT_HEIGHT = 50;
+    static constexpr std::int32_t CBA_TEXT_RIGHT_MARGIN = 4;
+
+    // Host key codes the frontends deliver (drivers input events carry Qt's key numbers).
+    static constexpr std::uint32_t NOTE_HOST_KEY_ESCAPE = 0x01000000;
+    static constexpr std::uint32_t NOTE_HOST_KEY_RETURN = 0x01000004;
+    static constexpr std::uint32_t NOTE_HOST_KEY_ENTER = 0x01000005;
+    static constexpr std::uint32_t NOTE_HOST_KEY_F1 = 0x01000030;
+
+    s80_note::s80_note(window_server *serv)
+        : serv_(serv) {
+    }
+
+    eka2l1::rect s80_note::rect() {
+        return eka2l1::rect({ NOTE_AREA_LEFT + (NOTE_AREA_RIGHT - NOTE_AREA_LEFT - NOTE_WIDTH) / 2, 0 }, { NOTE_WIDTH, 0 });
+    }
+
+    bool s80_note::show(const std::u16string &title, const std::u16string &text, const std::u16string &button1,
+        const std::u16string &button2, completion done) {
+        {
+            const std::lock_guard<std::mutex> guard(lock_);
+            if (active_) {
+                return false;
+            }
+
+            active_ = true;
+            title_ = title;
+            text_ = text;
+
+            split_title(title_, text_);
+            button1_ = button1;
+            button2_ = button2;
+            done_ = std::move(done);
+        }
+
+        LOG_INFO(SERVICE_WINDOW, "Series 80 note up: \"{}\" / \"{}\" [{}|{}]", common::ucs2_to_utf8(title),
+            common::ucs2_to_utf8(text), common::ucs2_to_utf8(button1), common::ucs2_to_utf8(button2));
+
+        schedule_redraw();
+        return true;
+    }
+
+    void s80_note::split_title(std::u16string &title, std::u16string &text) {
+        // CEikonEnv's error alert packs "Title:\nMessage\n" into the first line and leaves the second
+        // empty: the title bar takes the first line, the body the rest.
+        const std::size_t title_end = title.find_first_of(u"\n\u2029");
+        if (title_end != std::u16string::npos) {
+            std::u16string rest = title.substr(title_end + 1);
+            title.resize(title_end);
+
+            if (!text.empty()) {
+                if (!rest.empty() && (rest.back() != u'\n')) {
+                    rest += u'\n';
+                }
+                rest += text;
+            }
+
+            text = rest;
+        }
+
+        while (!text.empty() && ((text.back() == u'\n') || (text.back() == u' '))) {
+            text.pop_back();
+        }
+    }
+
+    bool s80_note::active() {
+        const std::lock_guard<std::mutex> guard(lock_);
+        return active_;
+    }
+
+    void s80_note::answer(const int button) {
+        completion done;
+        {
+            const std::lock_guard<std::mutex> guard(lock_);
+            if (!active_) {
+                return;
+            }
+
+            active_ = false;
+            done = std::move(done_);
+            done_ = nullptr;
+        }
+
+        LOG_INFO(SERVICE_WINDOW, "Series 80 note answered with button {}", button);
+
+        // The completion takes the kernel lock itself (it completes the notifier's request).
+        if (done) {
+            done(button);
+        }
+
+        if (serv_) {
+            kernel_system *kern = serv_->get_kernel_system();
+            kern->lock();
+            schedule_redraw();
+            kern->unlock();
+        }
+    }
+
+    bool s80_note::handle_key_press(const std::uint32_t host_key) {
+        bool has_second = false;
+        {
+            const std::lock_guard<std::mutex> guard(lock_);
+            if (!active_) {
+                return false;
+            }
+
+            has_second = !button2_.empty();
+        }
+
+        switch (host_key) {
+        case NOTE_HOST_KEY_RETURN:
+        case NOTE_HOST_KEY_ENTER:
+        case NOTE_HOST_KEY_F1:
+        case NOTE_HOST_KEY_F1 + 12: // Joystick centre
+            answer(0);
+            break;
+
+        case NOTE_HOST_KEY_ESCAPE:
+            // Esc takes the second (cancelling) button when there is one.
+            answer(has_second ? 1 : 0);
+            break;
+
+        case NOTE_HOST_KEY_F1 + 3:
+            if (has_second) {
+                answer(1);
+            }
+            break;
+
+        default:
+            break;
+        }
+
+        // Every other key press stays with the note, as a modal dialog keeps the focus on the device.
+        return true;
+    }
+
+    // Called with the kernel lock held.
+    void s80_note::schedule_redraw() {
+        if (!serv_) {
+            return;
+        }
+
+        drivers::graphics_driver *driver = serv_->get_graphics_driver();
+
+        for (epoc::screen *scr = serv_->get_screens(); scr; scr = scr->next) {
+            scr->note = this;
+            scr->flags_ |= epoc::screen::FLAG_SERVER_REDRAW_PENDING;
+
+            if (driver) {
+                serv_->get_anim_scheduler()->schedule_if_sooner(driver, scr, serv_->get_ntimer()->microseconds());
+            }
+        }
+    }
+
+    // The 9300 GDR's faces: "System" is the bold family (every size carries the bold attribute), "SystemLight"
+    // the regular one. The window server makes no fonts: it takes one of those the applications hold.
+    fbsfont *s80_note::find_font(const bool bold, const std::int32_t design_height) {
+        fbs_server *fbss = serv_->get_fbs_server();
+        if (!fbss) {
+            return nullptr;
+        }
+
+        const std::u16string family = bold ? u"System" : u"SystemLight";
+        fbsfont *best = nullptr;
+        std::int32_t best_delta = 0x7FFFFFFF;
+
+        for (fbsfont *font : fbss->live_fonts()) {
+            if (font->of_info.family != family) {
+                continue;
+            }
+
+            std::int32_t delta = std::abs(font->of_info.metrics.design_height - design_height) * 2;
+            if (bold && (font->of_info.metric_identifier != CLOCK_FONT_METRIC)) {
+                // Prefer the face the command buttons and the pane clock use.
+                delta++;
+            }
+
+            if (delta < best_delta) {
+                best = font;
+                best_delta = delta;
+            }
+        }
+
+        return best;
+    }
+
+    void s80_note::draw_text(drivers::graphics_command_builder &builder, screen *scr, fbsfont *font, const std::u16string &text,
+        const eka2l1::rect &box, const std::uint32_t alignment, const eka2l1::vec4 &colour) {
+        if (!font || text.empty()) {
+            return;
+        }
+
+        gdi_store_command command;
+        command.opcode_ = gdi_store_command_draw_text;
+
+        gdi_store_command_draw_text_data &data = command.get_data_struct<gdi_store_command_draw_text_data>();
+        data.string_ = reinterpret_cast<char16_t *>(command.allocate_dynamic_data((text.length() + 1) * sizeof(char16_t)));
+        std::memcpy(data.string_, text.c_str(), (text.length() + 1) * sizeof(char16_t));
+
+        data.alignment_ = alignment;
+        data.text_box_ = box;
+        data.fbs_font_ptr_ = font;
+        data.color_ = colour;
+
+        gdi_store_command_segment segment;
+        segment.add_command(command);
+
+        common::region clip;
+        clip.add_rect(eka2l1::rect({ 0, 0 }, scr->current_mode().size));
+
+        const drivers::filter_option filter = (serv_->get_kernel_system()->get_config()->nearest_neighbor_filtering
+            ? drivers::filter_option::nearest : drivers::filter_option::linear);
+
+        builder.set_feature(drivers::graphics_feature::blend, false);
+        builder.clip_bitmap_region(clip, scr->display_scale_factor);
+
+        gdi_command_builder gdi_builder(serv_->get_graphics_driver(), builder, *serv_->get_bitmap_cache(), filter,
+            eka2l1::vec2(0, 0), scr->display_scale_factor, clip);
+        gdi_builder.build_segment(segment);
+    }
+
+    // Break the text into lines that fit the width, at spaces (and at the text's own line breaks).
+    static std::vector<std::u16string> wrap_note_text(fbsfont *font, const std::u16string &text, const std::int32_t width) {
+        std::vector<std::u16string> lines;
+        if (!font) {
+            lines.push_back(text);
+            return lines;
+        }
+
+        auto advance_of = [font](const char16_t c) -> std::int32_t {
+            return static_cast<std::int32_t>(font->of_info.adapter->get_glyph_advance(font->of_info.idx, c,
+                font->of_info.metric_identifier));
+        };
+
+        std::u16string line;
+        std::int32_t line_width = 0;
+        std::u16string word;
+        std::int32_t word_width = 0;
+
+        auto flush_word = [&]() {
+            if (word.empty()) {
+                return;
+            }
+
+            if (!line.empty() && (line_width + word_width > width)) {
+                while (!line.empty() && (line.back() == u' ')) {
+                    line.pop_back();
+                }
+                lines.push_back(line);
+                line.clear();
+                line_width = 0;
+            }
+
+            line += word;
+            line_width += word_width;
+            word.clear();
+            word_width = 0;
+        };
+
+        for (const char16_t c : text) {
+            if ((c == u'\n') || (c == u'\r') || (c == 0x2029)) {
+                flush_word();
+                if (!line.empty()) {
+                    lines.push_back(line);
+                }
+                line.clear();
+                line_width = 0;
+                continue;
+            }
+
+            word += c;
+            word_width += advance_of(c);
+
+            if (c == u' ') {
+                flush_word();
+            }
+        }
+
+        flush_word();
+        if (!line.empty()) {
+            lines.push_back(line);
+        }
+
+        return lines;
+    }
+
+    void s80_note::draw(drivers::graphics_command_builder &builder, screen *scr) {
+        std::u16string title;
+        std::u16string text;
+        std::u16string button1;
+        std::u16string button2;
+        {
+            const std::lock_guard<std::mutex> guard(lock_);
+            if (!active_) {
+                return;
+            }
+
+            title = title_;
+            text = text_;
+            button1 = button1_;
+            button2 = button2_;
+        }
+
+        drivers::graphics_driver *driver = serv_->get_graphics_driver();
+        if (!driver) {
+            return;
+        }
+
+        // A note with no labels still needs a way out: the device's alerts fall back to one OK button.
+        if (button1.empty() && button2.empty()) {
+            button1 = u"OK";
+        }
+
+        // Titles such as "System:" come with the colon the two-line alert puts after them.
+        while (!title.empty() && ((title.back() == u':') || (title.back() == u' '))) {
+            title.pop_back();
+        }
+
+        fbsfont *text_font = find_font(false, 20);
+        fbsfont *cba_font = find_font(true, 20);
+
+        if (!fonts_logged_) {
+            fonts_logged_ = true;
+            fbs_server *fbss = serv_->get_fbs_server();
+            if (fbss) {
+                for (fbsfont *font : fbss->live_fonts()) {
+                    LOG_INFO(SERVICE_WINDOW, "Series 80 note: live font {} '{}' style 0x{:X} design height {} metric {}", font->id,
+                        common::ucs2_to_utf8(font->of_info.family), font->of_info.face_attrib.style,
+                        font->of_info.metrics.design_height, font->of_info.metric_identifier);
+                }
+            }
+            LOG_INFO(SERVICE_WINDOW, "Series 80 note: text font {}, command button font {}", text_font ? text_font->id : 0,
+                cba_font ? cba_font->id : 0);
+        }
+
+        std::vector<std::u16string> lines = wrap_note_text(text_font, text, NOTE_WIDTH - 2 * (NOTE_FRAME + NOTE_TEXT_MARGIN));
+        if (lines.size() > NOTE_MAX_LINES) {
+            lines.resize(NOTE_MAX_LINES);
+        }
+
+        const std::int32_t line_count = std::max<std::int32_t>(1, static_cast<std::int32_t>(lines.size()));
+        const std::int32_t height = 2 * NOTE_FRAME + NOTE_TITLE_HEIGHT + line_count * NOTE_LINE_HEIGHT + 2 * NOTE_TEXT_MARGIN;
+        const eka2l1::vec2 screen_size = scr->current_mode().size;
+
+        eka2l1::rect box = rect();
+        box.top.y = (screen_size.y - height) / 2;
+        box.size.y = height;
+
+        const float scale = scr->display_scale_factor;
+
+        builder.set_feature(drivers::graphics_feature::clipping, false);
+        builder.set_feature(drivers::graphics_feature::stencil_test, false);
+        builder.set_feature(drivers::graphics_feature::blend, false);
+
+        auto fill = [&](const eka2l1::rect &r, const eka2l1::vec4 &colour) {
+            builder.set_brush_color_detail(colour);
+            builder.draw_rectangle(eka2l1::rect(r.top * scale, r.size * scale));
+        };
+
+        // Frame: three one-pixel rings, outermost darkest.
+        static const eka2l1::vec4 ring_colours[NOTE_FRAME] = {
+            { 66, 65, 74, 255 }, { 140, 138, 156, 255 }, { 214, 211, 222, 255 }
+        };
+
+        for (std::int32_t i = 0; i < NOTE_FRAME; i++) {
+            fill(eka2l1::rect(box.top + eka2l1::vec2(i, i), box.size - eka2l1::vec2(2 * i, 2 * i)), ring_colours[i]);
+        }
+
+        const eka2l1::rect inner(box.top + eka2l1::vec2(NOTE_FRAME, NOTE_FRAME), box.size - eka2l1::vec2(2 * NOTE_FRAME, 2 * NOTE_FRAME));
+        const eka2l1::rect title_rect(inner.top, { inner.size.x, NOTE_TITLE_HEIGHT });
+        const eka2l1::rect body_rect(inner.top + eka2l1::vec2(0, NOTE_TITLE_HEIGHT), inner.size - eka2l1::vec2(0, NOTE_TITLE_HEIGHT));
+
+        if (!title_bg_tried_) {
+            title_bg_tried_ = true;
+            load_skin_bitmap(serv_, driver, title_bg_, title_bg_size_, SKIN_DIALOG_FRAME, SKIN_DIALOG_TITLE, false);
+        }
+
+        if (title_bg_) {
+            builder.draw_bitmap(title_bg_, 0, eka2l1::rect(title_rect.top * scale, title_rect.size * scale),
+                eka2l1::rect({ 0, 0 }, { std::min(title_rect.size.x, title_bg_size_.x), std::min(title_rect.size.y, title_bg_size_.y) }));
+        } else {
+            fill(title_rect, { 214, 211, 222, 255 });
+        }
+
+        fill(body_rect, { 255, 255, 255, 255 });
+
+        const eka2l1::vec4 black(0, 0, 0, 255);
+
+        // The text box's top is the baseline.
+        draw_text(builder, scr, text_font, title, eka2l1::rect(title_rect.top + eka2l1::vec2(NOTE_TEXT_MARGIN, NOTE_TITLE_HEIGHT - 7),
+            { title_rect.size.x - 2 * NOTE_TEXT_MARGIN, NOTE_TITLE_HEIGHT }), static_cast<std::uint32_t>(epoc::text_alignment::left), black);
+
+        for (std::size_t i = 0; i < lines.size(); i++) {
+            const std::int32_t baseline = body_rect.top.y + NOTE_TEXT_MARGIN + static_cast<std::int32_t>(i + 1) * NOTE_LINE_HEIGHT - 5;
+            draw_text(builder, scr, text_font, lines[i], eka2l1::rect({ body_rect.top.x + NOTE_TEXT_MARGIN, baseline },
+                { body_rect.size.x - 2 * NOTE_TEXT_MARGIN, NOTE_LINE_HEIGHT }), static_cast<std::uint32_t>(epoc::text_alignment::left), black);
+        }
+
+        // The command buttons belong to the note while it is up: the first label in slot 1, the second in slot 4.
+        fill(eka2l1::rect({ CBA_LEFT, CBA_TOP_BAND }, { CBA_WIDTH, screen_size.y - CBA_TOP_BAND }), { 181, 178, 189, 255 });
+
+        const std::u16string labels[4] = { button1, u"", u"", button2 };
+        for (int slot = 0; slot < 4; slot++) {
+            if (labels[slot].empty()) {
+                continue;
+            }
+
+            const std::int32_t baseline = slot * CBA_SLOT_HEIGHT + 31;
+            draw_text(builder, scr, cba_font, labels[slot], eka2l1::rect({ CBA_LEFT, baseline },
+                { CBA_WIDTH - CBA_TEXT_RIGHT_MARGIN, CBA_SLOT_HEIGHT }), static_cast<std::uint32_t>(epoc::text_alignment::right), black);
         }
 
         builder.set_feature(drivers::graphics_feature::blend, false);
