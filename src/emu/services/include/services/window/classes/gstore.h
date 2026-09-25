@@ -27,6 +27,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 namespace eka2l1::drivers {
@@ -47,7 +48,8 @@ namespace eka2l1::epoc {
         gdi_store_command_set_clip_rect_single,
         gdi_store_command_set_clip_rect_multiple,
         gdi_store_command_disable_clip,
-        gdi_store_command_update_texture
+        gdi_store_command_update_texture,
+        gdi_store_command_set_draw_mode ///< State: the CGraphicsContext::TDrawMode the following draws use.
     };
 
     // Whether replaying this opcode puts any pixel on the target. The clipping
@@ -67,6 +69,41 @@ namespace eka2l1::epoc {
             return false;
         }
     }
+
+    // CGraphicsContext::TDrawMode (GDI.H): components EInvertScreen 1, EXor 2, EOr 4, EAnd 8,
+    // EInvertPen 16, EPenmode 32, EWriteAlpha 64.
+    enum gdi_draw_mode : std::uint32_t {
+        gdi_draw_mode_invert_screen = 1,
+        gdi_draw_mode_xor = 2,
+        gdi_draw_mode_or = 4,
+        gdi_draw_mode_and = 8,
+        gdi_draw_mode_logical_op = gdi_draw_mode_xor | gdi_draw_mode_or | gdi_draw_mode_and,
+        gdi_draw_mode_invert_pen = 16,
+        gdi_draw_mode_pen = 32,
+        gdi_draw_mode_write_alpha = 64,
+
+        gdi_draw_mode_notscreen = gdi_draw_mode_invert_screen,
+        gdi_draw_mode_notpen = gdi_draw_mode_invert_pen | gdi_draw_mode_pen
+    };
+
+    struct gdi_store_command_set_draw_mode_data {
+        std::uint32_t mode_;
+    };
+
+    // One pass of a TDrawMode emulated with fixed-function blending: out.rgb = src * src_factor + dst * dst_factor,
+    // where src is the colour below (pen or brush, maybe inverted) and dst the pixel already on the target.
+    // Colours are 0..1 per channel, so the logical ops are exact for 0/1 channel values and a smooth
+    // approximation between them (XOR = S + D - 2SD, AND = SD, OR = S + D - SD).
+    struct gdi_draw_mode_pass {
+        eka2l1::vec4 color_;
+        drivers::blend_factor src_factor_;
+        drivers::blend_factor dst_factor_;
+    };
+
+    // Expands a draw mode and the pen/brush colour (0..255 per channel) into blend passes. Returns 0 for the
+    // plain modes (PEN, WriteAlpha, NOTPEN) that draw with normal blending: color is then only updated
+    // (inverted for NOTPEN). At most 2 passes.
+    std::uint32_t gdi_expand_draw_mode(const std::uint32_t mode, eka2l1::vec4 &color, gdi_draw_mode_pass *passes);
 
     struct gdi_store_command_draw_rect_data {
         eka2l1::vec4 color_;
@@ -251,6 +288,11 @@ namespace eka2l1::epoc {
         common::region clip_;
         drivers::filter_option texture_filter_;
         bool premultiplied_target_;
+        std::uint32_t draw_mode_ = gdi_draw_mode_pen;
+
+        // Runs draw once per blend pass of the current draw mode, with the pass's colour as brush colour.
+        void draw_with_mode(const eka2l1::vec4 &color, const std::function<void()> &draw);
+        void build_line_geometry(const gdi_store_command_draw_line_data &cmd);
 
     public:
         explicit gdi_command_builder(drivers::graphics_driver *drv, drivers::graphics_command_builder &builder, bitmap_cache &bcache,

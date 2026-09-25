@@ -92,6 +92,12 @@ namespace eka2l1::epoc {
         bool underline{ false };
         bool strikethrough{ false };
 
+        // SetDrawMode (CGraphicsContext::TDrawMode, epoc::gdi_draw_mode); EDrawModePEN after Reset.
+        std::uint32_t draw_mode{ 32 };
+
+        // Stores a pen/brush draw, bracketed by draw-mode state commands when the mode is not PEN.
+        void add_moded_draw_command(epoc::gdi_store_command &cmd);
+
         void submit_queue_commands(kernel::thread *rq);
         void on_command_batch_done(service::ipc_context &ctx) override;
 
