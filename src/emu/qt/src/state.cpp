@@ -135,7 +135,9 @@ namespace eka2l1::desktop {
             }
 
             symsys->mount(drive_c, drive_media::physical, eka2l1::add_path(conf.storage, "/drives/c/"), io_attrib_internal);
-            symsys->mount(drive_d, drive_media::physical, eka2l1::add_path(conf.storage, "/drives/d/"), io_attrib_internal);
+            // On Series 80 the memory card is D: (the S80 SDK's epoc.ini maps its MMC there).
+            symsys->mount(drive_d, drive_media::physical, eka2l1::add_path(conf.storage, "/drives/d/"),
+                symsys->is_s80_device_active() ? io_attrib_removeable : io_attrib_internal);
             symsys->mount(drive_e, drive_media::physical, eka2l1::add_path(conf.storage, "/drives/e/"), io_attrib_removeable);
 
             on_system_reset(symsys.get());
