@@ -851,6 +851,61 @@ namespace eka2l1 {
         std::uint32_t mask_bmp_handle;
     };
 
+    static app_icon_handles icon_pair_handles(apa_app_registry &reg, const std::size_t pair) {
+        app_icon_handles handles;
+        handles.bmp_handle = reg.app_icons[pair * 2].bmp_rom_addr_ ? reg.app_icons[pair * 2].bmp_rom_addr_
+                                                                   : reg.app_icons[pair * 2].bmp_->id;
+        handles.mask_bmp_handle = reg.app_icons[pair * 2 + 1].bmp_rom_addr_ ? reg.app_icons[pair * 2 + 1].bmp_rom_addr_
+                                                                             : reg.app_icons[pair * 2 + 1].bmp_->id;
+        return handles;
+    }
+
+    std::size_t applist_icon_pair_for_int_request(const std::size_t pair_count, const std::int32_t request,
+        const std::function<std::size_t(std::int32_t)> &by_side) {
+        // Symbian 7.0s EAppListServAppIconByUid (16): RApaLsSession::GetAppIcon(TUid, TInt, CApaMaskedBitmap&).
+        // Its server answers CApaAppData::Icon(TInt) - an index into the AIF's icon list (the Series 80 file
+        // dialogs ask for icon 0 of every application). Later releases read the TInt as a side in pixels; a
+        // value past the icon list is taken that way, so neither reading ever misses.
+        if ((request >= 0) && (static_cast<std::size_t>(request) < pair_count)) {
+            return static_cast<std::size_t>(request);
+        }
+
+        return by_side(request);
+    }
+
+    // Symbian 7.0s op 16 (EAppListServAppIconByUid): arg0 = app UID, arg1 = icon index (or side in pixels),
+    // arg2 = TPckg<SReturnData_AppIconByUid> { TInt iIcon; TInt iIconMask; } - the two FBS handles.
+    // It used to fall to the unimplemented default (KErrNotSupported), and Documents' File > Save as, whose
+    // file-name dialog walks the app list for its document-type icons, left with that error: the "System /
+    // Unknown error" note instead of the dialog.
+    void applist_server::get_app_icon_by_uid(service::ipc_context &ctx) {
+        std::optional<epoc::uid> app_uid = ctx.get_argument_value<epoc::uid>(0);
+        std::optional<std::int32_t> request = ctx.get_argument_value<std::int32_t>(1);
+
+        if (!app_uid || !request) {
+            ctx.complete(epoc::error_argument);
+            return;
+        }
+
+        apa_app_registry *reg = get_registration(app_uid.value());
+
+        if (!reg || (reg->app_icons.size() < 2)) {
+            // CApaAppListServSession::AppIconByUidL: no such app, or an app without an icon: KErrNotFound.
+            ctx.complete(epoc::error_not_found);
+            return;
+        }
+
+        const std::size_t pair = applist_icon_pair_for_int_request(reg->app_icons.size() / 2, request.value(),
+            [&](const std::int32_t side) { return pick_icon_pair_by_size(*reg, eka2l1::vec2(side, side)); });
+
+        const app_icon_handles handle_result = icon_pair_handles(*reg, pair);
+        LOG_TRACE(SERVICE_APPLIST, "AppIconByUid 0x{:X} asked {}: pair {} of {}", app_uid.value(), request.value(), pair,
+            reg->app_icons.size() / 2);
+
+        ctx.write_data_to_descriptor_argument<app_icon_handles>(2, handle_result);
+        ctx.complete(epoc::error_none);
+    }
+
     void applist_server::get_app_icon(service::ipc_context &ctx) {
         std::optional<epoc::uid> app_uid = ctx.get_argument_value<epoc::uid>(0);
         std::optional<std::int32_t> icon_size_width = std::nullopt;
@@ -885,8 +940,6 @@ namespace eka2l1 {
             return;
         }
 
-        app_icon_handles handle_result;
-
         // An AIF carries its icon in several sizes (the Nokia 9300's: 20x25 list icons, 64x50 Desk icons);
         // CApaAppData::Icon(TSize) answers the one asked for. Take the exact size, else the largest that
         // fits inside it, else the one closest in area.
@@ -898,17 +951,7 @@ namespace eka2l1 {
                 chosen ? chosen->first->header_.size_pixels.y : -1);
         }
 
-        if (reg->app_icons[pair * 2].bmp_rom_addr_) {
-            handle_result.bmp_handle = reg->app_icons[pair * 2].bmp_rom_addr_;
-        } else {
-            handle_result.bmp_handle = reg->app_icons[pair * 2].bmp_->id;
-        }
-
-        if (reg->app_icons[pair * 2 + 1].bmp_rom_addr_) {
-            handle_result.mask_bmp_handle = reg->app_icons[pair * 2 + 1].bmp_rom_addr_;
-        } else {
-            handle_result.mask_bmp_handle = reg->app_icons[pair * 2 + 1].bmp_->id;
-        }
+        const app_icon_handles handle_result = icon_pair_handles(*reg, pair);
 
         if (legacy_level() == APA_LEGACY_LEVEL_OLD) {
             ctx.write_data_to_descriptor_argument<std::uint32_t>(2, handle_result.bmp_handle);
@@ -1569,6 +1612,10 @@ namespace eka2l1 {
 
         case applist_request_s60v2_app_icon_by_uid_and_size:
             serv->get_app_icon(*ctx);
+            break;
+
+        case applist_request_s60v2_app_icon_by_uid:
+            serv->get_app_icon_by_uid(*ctx);
             break;
 
         case applist_request_s60v2_get_app_icon_sizes:
