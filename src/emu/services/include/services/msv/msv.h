@@ -64,6 +64,7 @@ namespace eka2l1 {
         msv_get_message_directory = 0x25,
         msv_will_you_take_more_work = 0x26,
         msv_set_as_observer_only = 0x27,
+        msv_get_child_ids = 0x2A,
         msv_get_notify_sequence = 0x2D,
         msv_get_mtm_path = 0x2E,
         msv_set_mtm_path = 0x2F,
@@ -174,6 +175,7 @@ namespace eka2l1 {
         void get_entry(service::ipc_context *ctx);
         void get_children(service::ipc_context *ctx);
         void get_notify_sequence(service::ipc_context *ctx);
+        void get_child_ids(service::ipc_context *ctx);
         void set_as_observer_only(service::ipc_context *ctx);
         void get_mtm_path(service::ipc_context *ctx);
         void set_mtm_path(service::ipc_context *ctx);

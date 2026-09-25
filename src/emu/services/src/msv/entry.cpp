@@ -413,7 +413,10 @@ namespace eka2l1::epoc::msv {
 
     bool entry_indexer::owning_service(const std::uint32_t id, std::uint32_t &owning) {
         if (id == MSV_ROOT_ID_VALUE) {
-            return MSV_ROOT_ID_VALUE;
+            // The root is its own service. (This used to return without setting `owning`, so GetEntry
+            // on the root reported service 0 and the message centre then asked for entry 0.)
+            owning = MSV_ROOT_ID_VALUE;
+            return true;
         }
 
         std::uint32_t lookup_id = id;

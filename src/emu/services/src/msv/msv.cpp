@@ -45,6 +45,9 @@
 
 #include <common/path.h>
 
+#include <algorithm>
+#include <cstring>
+
 namespace eka2l1 {
     static const std::u16string DEFAULT_MSG_DATA_DIR = u"C:\\private\\1000484b\\Mail2\\";
     static const std::u16string DEFAULT_MSG_DATA_DIR_OLD = u"C:\\System\\Mail\\";
@@ -156,6 +159,7 @@ namespace eka2l1 {
         device_manager *mngr = sys->get_device_manager();
         message_folder_ = eka2l1::add_path(kern->is_eka1() ? DEFAULT_MSG_DATA_DIR_OLD : DEFAULT_MSG_DATA_DIR,
             common::utf8_to_ucs2(mngr->get_current()->firmware_code) + u"\\");
+
 
         io_system *io = sys->get_io_system();
 
@@ -491,6 +495,10 @@ namespace eka2l1 {
             set_as_observer_only(ctx);
             break;
 
+        case msv_get_child_ids:
+            get_child_ids(ctx);
+            break;
+
         case msv_get_notify_sequence:
             get_notify_sequence(ctx);
             break;
@@ -715,6 +723,9 @@ namespace eka2l1 {
         ctx->complete(epoc::error_none);
     }
 
+    // TMsvSelectionOrdering::iGrouping bit KMsvInvisibleFlag (MSVSTD.H).
+    static constexpr std::int32_t MSV_ORDERING_SHOW_INVISIBLE = 0x1;
+
     struct children_details {
         std::uint32_t parent_id_;
         std::uint32_t child_count_total_;
@@ -732,6 +743,15 @@ namespace eka2l1 {
 
         epoc::msv::entry_indexer *indexer = server<msv_server>()->indexer_.get();
         child_entries_ = indexer->get_entries_by_parent(details->parent_id_);
+
+        // Slot 1 is the client's TMsvSelectionOrdering (iGrouping, iSortType): invisible entries
+        // (the Deleted folder, service entries created hidden) are left out unless it asks for them.
+        std::optional<std::int32_t> grouping = ctx->get_argument_data_from_descriptor<std::int32_t>(1);
+        if (grouping && !(grouping.value() & MSV_ORDERING_SHOW_INVISIBLE)) {
+            child_entries_.erase(std::remove_if(child_entries_.begin(), child_entries_.end(), [](epoc::msv::entry *ent) {
+                return !ent || (ent->data_ & epoc::msv::entry::DATA_FLAG_INVISIBLE);
+            }), child_entries_.end());
+        }
 
         // TODO(pent0): Include the selection flags in slot 1
         std::uint8_t *buffer = reinterpret_cast<std::uint8_t *>(ctx->get_descriptor_argument_ptr(2));
@@ -782,6 +802,86 @@ namespace eka2l1 {
         } else {
             ctx->complete(epoc::error_none);
         }
+    }
+
+    // Packed CMsvEntryFilter as TMsvPackedEntryFilter copies it: the object image, vtable first.
+    struct packed_entry_filter {
+        std::uint32_t vtable_;
+        std::uint32_t service_id_;
+        std::uint32_t mtm_uid_;
+        std::uint32_t type_uid_;
+        std::uint64_t last_change_date_;
+        std::int32_t grouping_;
+        std::int32_t sorting_;
+        std::uint32_t sort_mtm_;
+    };
+
+    // EMsvGetChildIds (0x2A): arg0 = in: packed entry filter, out: packed selection
+    // (count, ids..., 0, 0); arg1 = parent entry id. The Series 80 v2 message centre
+    // lists its folders through this before it draws the folder pane.
+    void msv_client_session::get_child_ids(service::ipc_context *ctx) {
+        std::optional<std::uint32_t> parent = ctx->get_argument_value<std::uint32_t>(1);
+        std::uint8_t *buffer = ctx->get_descriptor_argument_ptr(0);
+        const std::size_t buffer_len = ctx->get_argument_data_size(0);
+        const std::size_t buffer_max_size = ctx->get_argument_max_data_size(0);
+
+        if (!parent || !buffer || !buffer_max_size) {
+            ctx->complete(epoc::error_argument);
+            return;
+        }
+
+        packed_entry_filter filter{};
+        std::memcpy(&filter, buffer, std::min<std::size_t>(buffer_len, sizeof(packed_entry_filter)));
+
+        epoc::msv::entry_indexer *indexer = server<msv_server>()->indexer_.get();
+        std::vector<epoc::msv::entry *> children = indexer->get_entries_by_parent(parent.value());
+        std::vector<epoc::msv::msv_id> ids;
+
+        for (epoc::msv::entry *ent : children) {
+            if (!ent) {
+                continue;
+            }
+            if (!(filter.grouping_ & MSV_ORDERING_SHOW_INVISIBLE) && (ent->data_ & epoc::msv::entry::DATA_FLAG_INVISIBLE)) {
+                continue;
+            }
+            if (filter.service_id_ && (filter.service_id_ != ent->service_id_)) {
+                continue;
+            }
+            if (filter.mtm_uid_ && (filter.mtm_uid_ != ent->mtm_uid_)) {
+                continue;
+            }
+            if (filter.type_uid_ && (filter.type_uid_ != ent->type_uid_)) {
+                continue;
+            }
+            if (filter.last_change_date_ && (ent->time_ < filter.last_change_date_)) {
+                continue;
+            }
+            ids.push_back(ent->id_);
+        }
+
+        std::string id_list;
+        for (const epoc::msv::msv_id id : ids) {
+            id_list += fmt::format(" 0x{:X}", id);
+        }
+        LOG_TRACE(SERVICE_MSV, "GetChildIds parent 0x{:X} filter service 0x{:X} mtm 0x{:X} type 0x{:X}: {} of {} children:{}",
+            parent.value(), filter.service_id_, filter.mtm_uid_, filter.type_uid_, ids.size(), children.size(), id_list);
+
+        std::uint32_t param1 = 0;
+        std::uint32_t param2 = 0;
+
+        common::chunkyseri measurer(nullptr, 0, common::SERI_MODE_MEASURE);
+        absorb_command_data(measurer, ids, param1, param2);
+
+        if (measurer.size() > buffer_max_size) {
+            ctx->complete(epoc::error_overflow);
+            return;
+        }
+
+        common::chunkyseri seri(buffer, buffer_max_size, common::SERI_MODE_WRITE);
+        absorb_command_data(seri, ids, param1, param2);
+
+        ctx->set_descriptor_argument_length(0, static_cast<std::uint32_t>(seri.size()));
+        ctx->complete(epoc::error_none);
     }
 
     void msv_client_session::get_notify_sequence(service::ipc_context *ctx) {
@@ -906,7 +1006,10 @@ namespace eka2l1 {
             }
 
             // EKA1's packed record grew these three 32-bit fields in Symbian 8.0.
-            if (kern->is_eka1() && (kern->get_epoc_version() >= epocver::epoc80)) {
+            // (7.0s already has them: its SDK's CMtmDllInfo carries iMessagingCapability,
+            // iSendBodyCapability and iCapabilitiesAvailable, and the Series 80 v2 message centre
+            // misreads every record after the first without them.)
+            if (kern->is_eka1() && (kern->get_epoc_version() >= epocver::epoc7)) {
                 std::uint32_t cap_send_32 = group->cap_send_;
                 std::uint32_t cap_body_32 = group->cap_body_;
                 std::uint32_t cap_avail_32 = group->cap_avail_;

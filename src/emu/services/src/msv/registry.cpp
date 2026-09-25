@@ -94,6 +94,10 @@ namespace eka2l1::epoc::msv {
                 loader::absorb_resource_string(info_reader, comp.filename_);
             }
 
+            LOG_TRACE(SERVICE_MSV, "MTM group 0x{:X} ({}) component {} '{}' type 0x{:X} specific 0x{:X} entry {} v{}.{}.{} file '{}'",
+                new_group.mtm_uid_, common::ucs2_to_utf8(eka2l1::filename(path)), i, common::ucs2_to_utf8(comp.name_), comp.comp_uid_,
+                comp.specific_uid_, comp.entry_point_, comp.major_, comp.minor_, comp.build_, common::ucs2_to_utf8(comp.filename_));
+
             const std::uint32_t comp_uid = comp.comp_uid_;
 
             comps_[comp_uid].push_back(&comp);

@@ -51,6 +51,11 @@
 #include <ctime>
 #include <utils/err.h>
 
+namespace eka2l1 {
+    // kernel.cpp: logs the ROM callers on a guest thread's stack.
+    void log_guest_panic_stack(kernel_system *kern, kernel::thread *thr);
+}
+
 namespace eka2l1::epoc {
     static security_policy server_exclamation_point_name_policy({ cap_prot_serv });
     static security_policy kill_process_policy({ cap_power_mgmt });
@@ -184,6 +189,21 @@ namespace eka2l1::epoc {
 
     BRIDGE_FUNC(eka2l1::ptr<void>, trap_handler) {
         kernel::thread_local_data *local_data = current_local_data(kern);
+        // Diagnostic (env EKA2L1_TRAP_TRACE): on EKA1 both User::Leave() and TTrap::UnTrap() ask for the
+        // trap handler, a leave with its code still in a low register. Log r0/r4/r5 per call, and the
+        // guest stack when either looks like a small error code (a likely leave, e.g. -1 KErrNotFound).
+        static const bool trap_trace = std::getenv("EKA2L1_TRAP_TRACE") != nullptr;
+        if (trap_trace) {
+            arm::core *cpu = kern->get_cpu();
+            LOG_TRACE(KERNEL, "TrapHandler from {} lr 0x{:X} r0 {} r4 {} r5 {}", kern->crr_thread()->name(), cpu->get_lr(),
+                static_cast<std::int32_t>(cpu->get_reg(0)), static_cast<std::int32_t>(cpu->get_reg(4)),
+                static_cast<std::int32_t>(cpu->get_reg(5)));
+            const std::int32_t r0 = static_cast<std::int32_t>(cpu->get_reg(0));
+            const std::int32_t r4 = static_cast<std::int32_t>(cpu->get_reg(4));
+            if (((r0 < 0) && (r0 > -100)) || ((r4 < 0) && (r4 > -100))) {
+                eka2l1::log_guest_panic_stack(kern, kern->crr_thread());
+            }
+        }
         return local_data->trap_handler;
     }
 
