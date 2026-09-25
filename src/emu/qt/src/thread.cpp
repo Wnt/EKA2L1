@@ -169,7 +169,7 @@ static void on_ui_window_key_event(void *userdata, const std::uint32_t key, cons
     auto key_evt = make_key_event_driver(static_cast<int>(key), pressed ? eka2l1::drivers::key_state::pressed : eka2l1::drivers::key_state::released,
         text, native);
 
-    const std::lock_guard<std::mutex> guard(emu->lockdown);
+    const auto guard = lock_reporting_stall(emu->lockdown, pressed ? "the UI lock to deliver a key press" : "the UI lock to deliver a key release");
     if (emu->ui_main && emu->ui_main->deliver_key_event(key, pressed)) {
         return;
     }
