@@ -36,7 +36,8 @@ namespace eka2l1 {
 
     enum etel_subsession_type {
         etel_subsession_type_phone = 0,
-        etel_subsession_type_line = 1
+        etel_subsession_type_line = 1,
+        etel_subsession_type_custom = 2
     };
 
     struct etel_subsession {
@@ -110,6 +111,25 @@ namespace eka2l1 {
 
         etel_subsession_type type() const override {
             return etel_subsession_type_phone;
+        }
+    };
+
+    /**
+     * \brief A TSY extension object opened from a phone by name (Nokia's RMmCustomAPI is
+     *        "CUSTOMAPI" on Series 80 and S60 1.x/2.x).
+     *
+     * The ROM's SecurityServer, SatServer and CbsServer open one while they construct and
+     * leave when the open fails, which takes the Series 80 Eikon server down with them. The
+     * emulator has no modem for the extension to talk to, so the object opens and every
+     * request on it is answered KErrNotSupported at once: a clear "not here" instead of a
+     * client thread parked forever.
+     */
+    struct etel_custom_subsession : public etel_subsession {
+    public:
+        explicit etel_custom_subsession(etel_session *session, const std::string &name, const etel_legacy_level lvl);
+        void dispatch(service::ipc_context *ctx) override;
+        etel_subsession_type type() const override {
+            return etel_subsession_type_custom;
         }
     };
 
