@@ -331,7 +331,11 @@ namespace eka2l1 {
                 // Create the subsession
                 new_sub = std::make_unique<etel_line_subsession>(this, *line_ite, server<etel_server>()->legacy_level());
             } else {
-                LOG_ERROR(SERVICE_ETEL, "Unable to open subsession with object name {}", common::ucs2_to_utf8(name_of_object.value()));
+                // Not a line: a TSY extension object (Nokia's CUSTOMAPI and friends). Open it as
+                // a stub; the Series 80 system servers cannot construct without one.
+                const std::string ext_name = common::ucs2_to_utf8(name_of_object.value());
+                LOG_INFO(SERVICE_ETEL, "Opening TSY extension object {} from phone as a stub", ext_name);
+                new_sub = std::make_unique<etel_custom_subsession>(this, ext_name, server<etel_server>()->legacy_level());
             }
         } else {
             LOG_ERROR(SERVICE_ETEL, "Unhandled subsession type to open from {}", static_cast<int>(sub->type()));
@@ -513,5 +517,15 @@ namespace eka2l1 {
                 break;
             }
         }
+    }
+
+    etel_custom_subsession::etel_custom_subsession(etel_session *session, const std::string &name, const etel_legacy_level lvl)
+        : etel_subsession(session, lvl) {
+        name_ = name;
+    }
+
+    void etel_custom_subsession::dispatch(service::ipc_context *ctx) {
+        LOG_TRACE(SERVICE_ETEL, "TSY extension {} request {} answered as not supported", name_, ctx->msg->function);
+        ctx->complete(epoc::error_not_supported);
     }
 }
