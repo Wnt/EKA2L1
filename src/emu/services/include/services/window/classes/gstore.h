@@ -88,12 +88,18 @@ namespace eka2l1::epoc {
         std::uint32_t point_count_;
     };
 
+    enum gdi_store_command_draw_text_flags {
+        GDI_STORE_COMMAND_TEXT_UNDERLINE = 1 << 0,
+        GDI_STORE_COMMAND_TEXT_STRIKETHROUGH = 1 << 1
+    };
+
     struct gdi_store_command_draw_text_data {
         eka2l1::vec4 color_;
         char16_t *string_;
         eka2l1::rect text_box_;
         std::uint32_t alignment_;
         void *fbs_font_ptr_;
+        std::uint32_t text_flags_;
     };
     
     struct gdi_store_command_draw_raw_texture_data {
@@ -149,7 +155,8 @@ namespace eka2l1::epoc {
 
     struct gdi_store_command {
         gdi_store_command_opcode opcode_ = gdi_store_command_invalid;
-        alignas(std::max_align_t) std::uint8_t data_[MAX_COMMAND_STORE_DATA_SIZE];
+        // Zeroed, so a producer that predates a field (the draw-text flags) leaves it off, not random.
+        alignas(std::max_align_t) std::uint8_t data_[MAX_COMMAND_STORE_DATA_SIZE] = {};
         std::shared_ptr<std::vector<std::uint8_t>> dynamic_data_;
 
         std::uint8_t *allocate_dynamic_data(const std::size_t size) {

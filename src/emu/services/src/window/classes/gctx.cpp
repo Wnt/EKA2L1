@@ -147,6 +147,8 @@ namespace eka2l1::epoc {
         draw_text_data.alignment_ = static_cast<std::uint32_t>(align);
         draw_text_data.text_box_ = area;
         draw_text_data.fbs_font_ptr_ = text_font;
+        draw_text_data.text_flags_ = (underline ? GDI_STORE_COMMAND_TEXT_UNDERLINE : 0)
+            | (strikethrough ? GDI_STORE_COMMAND_TEXT_STRIKETHROUGH : 0);
         draw_text_data.color_ = common::rgba_to_vec(pen_color);
         draw_text_data.color_.w = 255;
 
@@ -866,6 +868,9 @@ namespace eka2l1::epoc {
         brush_pattern_handle = 0;
         line_position = { 0, 0 };
 
+        underline = false;
+        strikethrough = false;
+
         clipping_rect.make_empty();
         clipping_region.make_empty();
 
@@ -899,12 +904,12 @@ namespace eka2l1::epoc {
     }
 
     void graphic_context::set_underline_style(service::ipc_context &context, ws_cmd &cmd) {
-        // TODO: Implement set underline style
+        underline = (*reinterpret_cast<std::int32_t *>(cmd.data_ptr) != 0);
         context.complete(epoc::error_none);
     }
 
     void graphic_context::set_strikethrough_style(service::ipc_context &context, ws_cmd &cmd) {
-        // TODO: Implement set strikethrough style
+        strikethrough = (*reinterpret_cast<std::int32_t *>(cmd.data_ptr) != 0);
         context.complete(epoc::error_none);
     }
     

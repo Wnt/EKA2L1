@@ -99,8 +99,13 @@ namespace eka2l1::epoc {
             return draw_text(text, box, alignment, driver, builder, { scale_factor, scale_factor });
         }
 
+        /**
+         * \param pen_span  If given, receives the pen's x where the text starts and where it ends (the
+         *                  advance), for underline and strikethrough.
+         */
         bool draw_text(const std::u16string &text, const eka2l1::rect &box, const epoc::text_alignment alignment, drivers::graphics_driver *driver,
-            drivers::graphics_command_builder &builder, const eka2l1::vec2f scale_vector, bool source_over_alpha = false);
+            drivers::graphics_command_builder &builder, const eka2l1::vec2f scale_vector, bool source_over_alpha = false,
+            eka2l1::vec2 *pen_span = nullptr);
 
         int get_char_size() const {
             return size_;
