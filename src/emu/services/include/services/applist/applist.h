@@ -379,6 +379,8 @@ namespace eka2l1 {
 
         // Exact dimensions win; otherwise choose the nearest area that does not exceed the request.
         std::optional<apa_app_masked_icon_bitmap> get_icon_by_size(apa_app_registry &registry, const eka2l1::vec2 &size);
+        // Index of the icon/mask pair that answers a request for an icon of this size (see get_app_icon).
+        std::size_t pick_icon_pair_by_size(apa_app_registry &registry, const eka2l1::vec2 &size);
         std::optional<apa_app_masked_icon_bitmap> get_list_icon(apa_app_registry &registry);
 
         std::mutex list_access_mut_;

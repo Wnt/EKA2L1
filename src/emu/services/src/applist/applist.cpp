@@ -45,6 +45,7 @@
 #include <utils/err.h>
 
 #include <config/config.h>
+#include <cstdlib>
 
 namespace eka2l1 {
     static const std::array<std::u16string, 10> RECOG_MIME_TYPES = {
@@ -886,17 +887,27 @@ namespace eka2l1 {
 
         app_icon_handles handle_result;
 
-        // TODO: Iterate and choose right size. But have to do many code....
-        if (reg->app_icons[0].bmp_rom_addr_) {
-            handle_result.bmp_handle = reg->app_icons[0].bmp_rom_addr_;
-        } else {
-            handle_result.bmp_handle = reg->app_icons[0].bmp_->id;
+        // An AIF carries its icon in several sizes (the Nokia 9300's: 20x25 list icons, 64x50 Desk icons);
+        // CApaAppData::Icon(TSize) answers the one asked for. Take the exact size, else the largest that
+        // fits inside it, else the one closest in area.
+        const std::size_t pair = pick_icon_pair_by_size(*reg, eka2l1::vec2(icon_size_width.value(), icon_size_height.value()));
+        {
+            std::optional<apa_app_masked_icon_bitmap> chosen = get_icon(*reg, pair);
+            LOG_TRACE(SERVICE_APPLIST, "AppIcon 0x{:X} asked {}x{}: pair {} of {} ({}x{})", app_uid.value(), icon_size_width.value(),
+                icon_size_height.value(), pair, reg->app_icons.size() / 2, chosen ? chosen->first->header_.size_pixels.x : -1,
+                chosen ? chosen->first->header_.size_pixels.y : -1);
         }
 
-        if (reg->app_icons[1].bmp_rom_addr_) {
-            handle_result.mask_bmp_handle = reg->app_icons[1].bmp_rom_addr_;
+        if (reg->app_icons[pair * 2].bmp_rom_addr_) {
+            handle_result.bmp_handle = reg->app_icons[pair * 2].bmp_rom_addr_;
         } else {
-            handle_result.mask_bmp_handle = reg->app_icons[1].bmp_->id;
+            handle_result.bmp_handle = reg->app_icons[pair * 2].bmp_->id;
+        }
+
+        if (reg->app_icons[pair * 2 + 1].bmp_rom_addr_) {
+            handle_result.mask_bmp_handle = reg->app_icons[pair * 2 + 1].bmp_rom_addr_;
+        } else {
+            handle_result.mask_bmp_handle = reg->app_icons[pair * 2 + 1].bmp_->id;
         }
 
         if (legacy_level() == APA_LEGACY_LEVEL_OLD) {
@@ -1926,6 +1937,44 @@ namespace eka2l1 {
             real_mask_bmp = eka2l1::ptr<epoc::bitwise_bitmap>(registry.app_icons[index * 2 + 1].bmp_rom_addr_).get(sys->get_memory_system());
 
         return std::make_optional(std::make_pair(real_bmp, real_mask_bmp));
+    }
+
+    std::size_t applist_server::pick_icon_pair_by_size(apa_app_registry &registry, const eka2l1::vec2 &size) {
+        // Same rule as get_icon_by_size: the exact dimensions, else the largest icon whose area does not
+        // exceed the requested area (Desk asks its own title icon as 50x64 of an AIF holding 64x50 and
+        // 25x20, and shows the 64x50), else the smallest there is.
+        const std::size_t pair_count = registry.app_icons.size() / 2;
+        const std::int64_t wanted_area = static_cast<std::int64_t>(size.x) * size.y;
+
+        std::size_t best = pair_count;
+        std::int64_t best_area = -1;
+        std::size_t smallest = 0;
+        std::int64_t smallest_area = -1;
+
+        for (std::size_t i = 0; i < pair_count; i++) {
+            std::optional<apa_app_masked_icon_bitmap> candidate = get_icon(registry, i);
+            if (!candidate.has_value() || !candidate->first) {
+                continue;
+            }
+
+            const eka2l1::vec2 candidate_size = candidate->first->header_.size_pixels;
+            if (candidate_size == size) {
+                return i;
+            }
+
+            const std::int64_t area = static_cast<std::int64_t>(candidate_size.x) * candidate_size.y;
+            if ((area <= wanted_area) && (area > best_area)) {
+                best_area = area;
+                best = i;
+            }
+
+            if ((smallest_area < 0) || (area < smallest_area)) {
+                smallest_area = area;
+                smallest = i;
+            }
+        }
+
+        return (best < pair_count) ? best : smallest;
     }
 
     std::optional<apa_app_masked_icon_bitmap> applist_server::get_icon_by_size(apa_app_registry &registry, const eka2l1::vec2 &size) {
