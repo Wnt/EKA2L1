@@ -46,6 +46,7 @@ namespace eka2l1::epoc {
     struct window_group;
     struct dsa;
     struct canvas_interface;
+    struct anim_executor;
 
     struct canvas_observer {
     public:
@@ -110,6 +111,9 @@ namespace eka2l1::epoc {
         std::unique_ptr<epoc::gdi_store_command_segment> pending_segment_;
         std::vector<canvas_observer*> observers_;
 
+        // Animations of anim DLLs created on this window (RAnim), drawn over its content.
+        std::vector<anim_executor*> anims_;
+
         window_surface_attachment background_surface_;
         // Pre-ScreenPlay direct rendering does not replace a GCE background.
         window_surface_attachment direct_surface_;
@@ -138,6 +142,15 @@ namespace eka2l1::epoc {
 
         void add_canvas_observer(canvas_observer *ob);
         void remove_canvas_observer(canvas_observer *ob);
+
+        /**
+         * \brief Draw this window's animations over its content, the way WSERV calls CAnim::Redraw.
+         *
+         * \param content_drawn True if the window's content was drawn in this frame, so every animation must be
+         *                      drawn again over it. Otherwise only animations whose state changed are drawn.
+         * \returns True if anything was drawn.
+         */
+        bool draw_anims(drivers::graphics_command_builder &builder, const bool content_drawn);
 
         epoc::display_mode display_mode() const;
         eka2l1::vec2 absolute_position() const override;

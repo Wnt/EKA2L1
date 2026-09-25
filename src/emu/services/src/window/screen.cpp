@@ -18,6 +18,7 @@
  */
 
 #include <services/window/classes/dsa.h>
+#include <services/window/classes/plugins/animdll.h>
 #include <services/window/classes/winbase.h>
 #include <services/window/classes/wingroup.h>
 #include <services/window/classes/winuser.h>
@@ -500,10 +501,41 @@ namespace eka2l1::epoc {
         builder.set_feature(drivers::graphics_feature::clipping, false);
     }
 
+    bool screen::anims_need_redraw() {
+        for (anim_executor *anim : anims_) {
+            if (anim->canvas_ && anim->canvas_->can_be_physically_seen() && anim->overlay_dirty()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool screen::next_anim_update(std::uint64_t &delay_us) {
+        bool found = false;
+
+        for (anim_executor *anim : anims_) {
+            if (!anim->canvas_ || !anim->canvas_->can_be_physically_seen()) {
+                continue;
+            }
+
+            std::uint64_t delay = 0;
+            if (anim->next_overlay_update(delay)) {
+                delay_us = found ? std::min(delay_us, delay) : delay;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
     bool screen::redraw(drivers::graphics_command_builder &builder, const bool need_bind) {
         if (need_update_visible_regions()) {
             recalculate_visible_regions();
         }
+
+        // A clock that ticked is drawn by walking the windows, so it rules out the in-place caret flip.
+        const bool anims_due = anims_need_redraw();
 
         common::region cursor_region;
         eka2l1::rect cursor_rect;
@@ -518,7 +550,7 @@ namespace eka2l1::epoc {
         // inverse, so this restores exactly what was under it, and an idle editor costs one small draw per
         // half second instead of recomposing every window from its redraw store.
         const bool white_cursor = (cursor_color.x == 255) && (cursor_color.y == 255) && (cursor_color.z == 255);
-        const bool only_flip = cursor_present && white_cursor && text_cursor_geometry_valid
+        const bool only_flip = cursor_present && white_cursor && text_cursor_geometry_valid && !anims_due
             && ((flags_ & (FLAG_SERVER_REDRAW_PENDING | FLAG_CLIENT_REDRAW_PENDING)) == 0) && (active_dsa_count_ == 0)
             && (cursor_rect == text_cursor_drawn_rect) && (cursor_hollow == text_cursor_drawn_hollow)
             && cursor_region.identical(text_cursor_drawn_region);
@@ -622,6 +654,20 @@ namespace eka2l1::epoc {
             const std::uint64_t now = serv.get_ntimer()->microseconds();
 
             serv.get_anim_scheduler()->schedule_if_sooner(driver, this, (now / 500000 + 1) * 500000);
+        }
+
+        // A clock needs a frame when its time next changes (the next second or minute), drawn in place.
+        std::uint64_t anim_delay = 0;
+        if (next_anim_update(anim_delay)) {
+            for (anim_executor *anim : anims_) {
+                if (anim->canvas_) {
+                    window_server &serv = anim->canvas_->client->get_ws();
+                    const std::uint64_t now = serv.get_ntimer()->microseconds();
+
+                    serv.get_anim_scheduler()->schedule_if_sooner(driver, this, now + anim_delay);
+                    break;
+                }
+            }
         }
     }
 

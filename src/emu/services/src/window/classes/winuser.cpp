@@ -23,6 +23,7 @@
 #include <services/window/classes/scrdvc.h>
 #include <services/window/classes/wingroup.h>
 #include <services/window/classes/winuser.h>
+#include <services/window/classes/plugins/animdll.h>
 #include <services/window/op.h>
 #include <services/window/opheader.h>
 #include <services/window/screen.h>
@@ -150,6 +151,56 @@ namespace eka2l1::epoc {
         if (ite != observers_.end()) {
             observers_.erase(ite);
         }
+    }
+
+    bool canvas_base::draw_anims(drivers::graphics_command_builder &builder, const bool content_drawn) {
+        if (anims_.empty() || !can_be_physically_seen()) {
+            return false;
+        }
+
+        window_server &serv = client->get_ws();
+
+        const eka2l1::drivers::filter_option filter = (serv.get_kernel_system()->get_config()->nearest_neighbor_filtering ?
+            eka2l1::drivers::filter_option::nearest : eka2l1::drivers::filter_option::linear);
+
+        bool drawn = false;
+
+        for (anim_executor *anim : anims_) {
+            if (!content_drawn && !anim->overlay_dirty()) {
+                continue;
+            }
+
+            gdi_store_command_segment segment;
+            eka2l1::rect bounds;
+
+            if (!anim->build_overlay(segment, bounds) || segment.commands_.empty()) {
+                continue;
+            }
+
+            // CAnim draws clipped to what is visible of its window, and a clock to its own rectangle
+            common::region clip;
+            clip.add_rect(eka2l1::rect(bounds.top + abs_rect.top, bounds.size));
+            clip = clip.intersect(visible_region);
+
+            if (clip.empty()) {
+                continue;
+            }
+
+            builder.set_feature(drivers::graphics_feature::blend, false);
+            builder.clip_bitmap_region(clip, scr->display_scale_factor);
+
+            gdi_command_builder gdi_builder(serv.get_graphics_driver(), builder, *serv.get_bitmap_cache(), filter,
+                abs_rect.top, scr->display_scale_factor, clip);
+
+            gdi_builder.build_segment(segment);
+            drawn = true;
+        }
+
+        if (drawn) {
+            builder.set_feature(drivers::graphics_feature::blend, false);
+        }
+
+        return drawn;
     }
 
     void canvas_base::attach_surface(const std::shared_ptr<window_surface> &surface, const surface_configuration &config, bool direct) {
@@ -1060,7 +1111,7 @@ namespace eka2l1::epoc {
         }
 
         if ((scr->flags_ & screen::FLAG_SERVER_REDRAW_PENDING) == 0 && !surface_changed()) {
-            return false;
+            return draw_anims(builder, false);
         }
 
         driver_builder_.reset_list();
@@ -1080,6 +1131,7 @@ namespace eka2l1::epoc {
             builder.draw_rectangle(eka2l1::rect(abs_pos * scr->display_scale_factor, size() * scr->display_scale_factor));
         }
         draw_surface(builder, background_surface_);
+        draw_anims(builder, true);
         draw_surface(builder, direct_surface_);
 
         return true;
@@ -1472,7 +1524,11 @@ namespace eka2l1::epoc {
         eka2l1::drivers::filter_option filter = (client->get_ws().get_kernel_system()->get_config()->nearest_neighbor_filtering ?
             eka2l1::drivers::filter_option::nearest : eka2l1::drivers::filter_option::linear);
 
+        // Whether this frame put any of the window's content on the screen: its animations then go over it again.
+        bool content_drawn = false;
+
         if (scr->flags_ & screen::FLAG_SERVER_REDRAW_PENDING) {
+            content_drawn = true;
             auto &segments = redraw_segments_.get_segments();
 
             if (!segments.empty()) {
@@ -1515,9 +1571,11 @@ namespace eka2l1::epoc {
 
                 gdi_builder.build_segment(*pending_segment_);
                 pending_segment_.reset();
+                content_drawn = true;
             }
 
             if (!cmd_list.empty()) {
+                content_drawn = true;
                 builder.clip_bitmap_region(visible_region, scr->display_scale_factor);
                 builder.draw_rectangle(abs_rect);
 
@@ -1535,6 +1593,8 @@ namespace eka2l1::epoc {
                 }
             }
         }
+
+        draw_anims(builder, content_drawn);
 
         if (direct_surface_.surface) {
             draw_surface(builder, direct_surface_);
@@ -1892,6 +1952,9 @@ namespace eka2l1::epoc {
         builder.set_texture_filter(driver_win_id, false, filter);
         builder.set_texture_filter(driver_win_id, true, filter);
         builder.draw_bitmap(driver_win_id, 0, draw_dest_rect, eka2l1::rect({ 0, 0 }, { 0, 0 }), eka2l1::vec2(0, 0), 0.0f, 0);
+        builder.set_feature(drivers::graphics_feature::blend, false);
+
+        draw_anims(builder, true);
 
         return true;
     }
