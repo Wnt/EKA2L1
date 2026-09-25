@@ -19,11 +19,17 @@
  */
 
 #include <common/algorithm.h>
+#include <common/log.h>
+#include <common/time.h>
 #include <common/cvt.h>
 #include <common/path.h>
 #include <common/platform.h>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdlib>
+#include <ctime>
+#include <iterator>
 #include <memory>
 #include <unordered_map>
 
@@ -164,6 +170,129 @@ namespace eka2l1::epoc {
         return locale;
     }
 
+    // The Series 80 default locale: the one Nokia's Series 80 SDK ships in C:\System\Data\LOCALE.D00
+    // (Finland: country 358, European day-month-year order, date separator '/', time ':', Monday
+    // first, Mon-Fri working days, European summer-time zone), with a 24-hour clock and the host's
+    // time zone (TZ) as the home zone. The ROM carries no locale file of its own, and the SDK file
+    // is a better starting point for a Nordic device than the American stub above.
+    static epoc::locale get_s80_default_locale() {
+        epoc::locale locale{};
+
+        const common::local_time_zone_info tz = common::get_local_time_zone_info(std::time(nullptr));
+
+        locale.country_code_ = 358;
+        locale.universal_time_offset_ = tz.offset_seconds - (tz.daylight_saving ? 3600 : 0);
+        locale.date_format_ = epoc::date_format_european;
+        locale.time_format_ = epoc::time_format_twenty_four_hours;
+        locale.currency_symbol_position_ = epoc::locale_before;
+        locale.currency_space_between_ = 1;
+        locale.currency_decimal_places = 2;
+        locale.negative_currency_format_ = epoc::negative_currency_leading_minus_sign;
+        locale.currency_triads_allowed_ = 1;
+        locale.thousands_separator_ = ',';
+        locale.decimal_separator_ = '.';
+        locale.date_separator_[1] = '/';
+        locale.date_separator_[2] = '/';
+        locale.time_separator_[1] = ':';
+        locale.time_separator_[2] = ':';
+        locale.am_pm_symbol_position_ = epoc::locale_after;
+        locale.am_pm_space_between_ = 1;
+        locale.home_daylight_saving_zone_ = epoc::daylight_saving_zone_european;
+        locale.daylight_saving_ = tz.daylight_saving ? epoc::daylight_saving_zone_european : epoc::daylight_saving_zone_none;
+        locale.work_days_ = 0x1F;
+        locale.start_of_week_ = epoc::monday;
+        locale.clock_format_ = epoc::clock_digital;
+        locale.language_downgrades_[0] = 0xFFFF;
+        locale.language_downgrades_[1] = 0xFFFF;
+        locale.language_downgrades_[2] = 0xFFFF;
+        locale.digit_type_ = epoc::digit_type_western;
+        locale.device_time_state_ = epoc::device_user_time;
+
+        return locale;
+    }
+
+    // BaflUtils::InitialiseLocale on Symbian 7.0s: the TLocale the user last set is kept, raw, in
+    // C:\System\Data\LOCALE.D<nn> (BaflUtils::PersistLocale writes it right after TLocale::Set:
+    // Control panel > Regional settings, or Clock > Change city through the world server). The
+    // Nokia 9300 ROM writes LOCALE.D00 (seen: after Change city); the SDK emulator's C: also holds
+    // a LOCALE.D01. Nothing in the ROM reads it back at boot under the emulator, so load it here,
+    // over the default: LOCALE.D<language> first, then LOCALE.D00. Only the TLocale part is taken;
+    // the file may be longer (the 7.0s one is 280 bytes).
+    static bool load_persisted_locale(eka2l1::system *sys, const epoc::language lang, epoc::locale &locale) {
+        io_system *io = sys->get_io_system();
+        if (!io) {
+            return false;
+        }
+
+        // The fields up to iDeviceTimeState are what 7.0s keeps; the rest is spare.
+        static constexpr std::size_t LOCALE_FILE_MIN_SIZE = offsetof(epoc::locale, spare_);
+
+        const int candidates[] = { static_cast<int>(lang), 0 };
+        for (std::size_t i = 0; i < std::size(candidates); i++) {
+            if ((i > 0) && (candidates[i] == candidates[0])) {
+                continue;
+            }
+
+            const std::string name = fmt::format("C:\\System\\Data\\LOCALE.D{:02d}", candidates[i]);
+            symfile f = io->open_file(common::utf8_to_ucs2(name), READ_MODE | BIN_MODE);
+            if (!f) {
+                continue;
+            }
+
+            epoc::locale loaded = locale;
+            const std::size_t want = std::min<std::size_t>(sizeof(epoc::locale), static_cast<std::size_t>(f->size()));
+            if ((want < LOCALE_FILE_MIN_SIZE) || (f->read_file(&loaded, 1, static_cast<std::uint32_t>(want)) != want)) {
+                LOG_WARN(KERNEL, "{} is {} bytes, too short for a TLocale; ignored", name, f->size());
+                continue;
+            }
+
+            locale = loaded;
+            LOG_INFO(KERNEL, "Locale from {}: country {}, UTC offset {} s, summer time {}, date format {}, time format {}",
+                name, locale.country_code_, locale.universal_time_offset_,
+                epoc::locale_home_on_summer_time(locale) ? "on" : "off",
+                static_cast<int>(locale.date_format_), static_cast<int>(locale.time_format_));
+            return true;
+        }
+
+        return false;
+    }
+
+    // At boot, once the drives are mounted (initialize_system_properties runs before that): the
+    // persisted TLocale, if the guest saved one, replaces the Series 80 default.
+    static void load_s80_persisted_locale(eka2l1::system *sys) {
+        kernel_system *kern = sys->get_kernel_system();
+        if (!kern || !kern->is_eka1() || !sys->is_s80_device_active()) {
+            return;
+        }
+
+        property_ptr prop = kern->get_prop(epoc::SYS_CATEGORY, epoc::LOCALE_DATA_KEY);
+        std::optional<epoc::locale> current = prop ? prop->get_pkg<epoc::locale>() : std::nullopt;
+        if (!current) {
+            return;
+        }
+
+        epoc::locale locale = current.value();
+        if (!load_persisted_locale(sys, static_cast<epoc::language>(kern->get_current_language()), locale)) {
+            return;
+        }
+
+        // The file keeps the summer-time bits of the day it was saved. The device's world server
+        // flips them at the change-over; under the emulator it only runs once an app starts it.
+        // When the saved home zone is the host's zone (TZ), take today's state from the host, so
+        // a golden saved in summer is right in winter.
+        const common::local_time_zone_info tz = common::get_local_time_zone_info(std::time(nullptr));
+        const std::int32_t host_zone = tz.offset_seconds - (tz.daylight_saving ? 3600 : 0);
+        const std::uint32_t home = locale.home_daylight_saving_zone_ | epoc::daylight_saving_zone_dst_home;
+
+        if ((locale.universal_time_offset_ == host_zone) && (locale.home_daylight_saving_zone_ != epoc::daylight_saving_zone_none)) {
+            locale.daylight_saving_ = tz.daylight_saving ? (locale.daylight_saving_ | locale.home_daylight_saving_zone_)
+                                                         : (locale.daylight_saving_ & ~home);
+        }
+
+        prop->set<epoc::locale>(locale);
+        kern->set_utc_offset(epoc::locale_effective_utc_offset(locale));
+    }
+
     static void initialize_system_properties(eka2l1::system *sys, eka2l1::config::state *cfg) {
         auto lang = epoc::locale_language{ epoc::lang_english, 0, 0, 0, 0, 0, 0, 0 };
         auto locale = epoc::get_locale_info();
@@ -178,6 +307,13 @@ namespace eka2l1::epoc {
             } else {
                 lang.language = static_cast<epoc::language>(cfg->language);
             }
+        }
+
+        if (kern->is_eka1() && sys->is_s80_device_active()) {
+            locale = get_s80_default_locale();
+            // EKA1 home time follows the TLocale (see locale_set_eka1).
+            kern->set_utc_offset(epoc::locale_effective_utc_offset(locale));
+            kern->set_home_time_follows_locale(true);
         }
 
         address am_pm_names_addr[] = {
@@ -517,6 +653,7 @@ namespace eka2l1 {
         
         void init_services_post_bootup(system *sys) {
             epoc::sms::supply_sim_settings(sys);
+            epoc::load_s80_persisted_locale(sys);
         }
 
         // EKA2L1_PRESTART="<path>[;<path>...]" starts ROM executables at boot, before any --run app, the
