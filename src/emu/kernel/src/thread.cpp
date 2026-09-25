@@ -39,6 +39,16 @@
 #include <utils/reqsts.h>
 
 namespace eka2l1 {
+    class kernel_system;
+    namespace kernel {
+        class thread;
+    }
+
+    // kernel.cpp: logs the ROM callers on a panicking guest thread's stack.
+    void log_guest_panic_stack(kernel_system *kern, kernel::thread *thr);
+}
+
+namespace eka2l1 {
     namespace kernel {
         int map_thread_priority_to_calc(thread_priority pri) {
             switch (pri) {
@@ -541,6 +551,7 @@ namespace eka2l1 {
             case kernel::entity_exit_type::panic:
                 LOG_TRACE(KERNEL, "Thread {} panicked with category: {} and exit code: {} {}", obj_name, exit_category_u8, reason,
                     exit_description ? (std::string("(") + *exit_description + ")") : "");
+                log_guest_panic_stack(kern, this);
 
                 // Decide HLE actions to take on this thread.
                 if (!take_on_panic(category, reason)) {

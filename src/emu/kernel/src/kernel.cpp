@@ -230,6 +230,50 @@ namespace eka2l1 {
         return fmt::format("0x{:x}", addr);
     }
 
+    // The ROM return addresses on the top of a guest thread's stack, for a panic or a dump line.
+    static std::string thread_dump_stack_of(kernel_system *kern, kernel::process *pr, const std::uint32_t sp, const std::size_t max_found) {
+        std::string stack_desc;
+        std::size_t found = 0;
+
+        for (std::uint32_t i = 0; pr && (i < 256) && (found < max_found); i++) {
+            std::uint32_t *word = reinterpret_cast<std::uint32_t *>(pr->get_ptr_on_addr_space(sp + i * 4));
+
+            if (!word) {
+                break;
+            }
+
+            if (kern->is_address_in_rom(*word)) {
+                stack_desc += fmt::format(" [sp+0x{:x}]={}", i * 4, thread_dump_name_addr(kern, *word));
+                found++;
+            }
+        }
+
+        return stack_desc;
+    }
+
+    // Called by kernel::thread::kill for a panic: names the code that raised it (pc/lr and the callers
+    // on the stack) so a guest panic can be traced to an image and export without a debugger.
+    void log_guest_panic_stack(kernel_system *kern, kernel::thread *thr) {
+        kernel::process *pr = thr->owning_process();
+        std::uint32_t pc = 0;
+        std::uint32_t lr = 0;
+        std::uint32_t sp = 0;
+
+        if ((thr == kern->crr_thread()) && kern->get_cpu()) {
+            pc = kern->get_cpu()->get_pc();
+            lr = kern->get_cpu()->get_lr();
+            sp = kern->get_cpu()->get_reg(13);
+        } else {
+            arm::core::thread_context &ctx = thr->get_thread_context();
+            pc = ctx.cpu_registers[15];
+            lr = ctx.cpu_registers[14];
+            sp = ctx.cpu_registers[13];
+        }
+
+        LOG_TRACE(KERNEL, "Panic stack of {}: pc={} lr={} sp=0x{:x} |{}", thr->name(), thread_dump_name_addr(kern, pc),
+            thread_dump_name_addr(kern, lr), sp, thread_dump_stack_of(kern, pr, sp, 24));
+    }
+
     static void dump_guest_threads(kernel_system *kern) {
         kern->lock();
 
@@ -254,21 +298,7 @@ namespace eka2l1 {
             }
 
             // ROM code addresses on the top of the stack: return addresses of the callers.
-            std::string stack_desc;
-            std::size_t found = 0;
-
-            for (std::uint32_t i = 0; pr && (i < 256) && (found < 12); i++) {
-                std::uint32_t *word = reinterpret_cast<std::uint32_t *>(pr->get_ptr_on_addr_space(sp + i * 4));
-
-                if (!word) {
-                    break;
-                }
-
-                if (kern->is_address_in_rom(*word)) {
-                    stack_desc += fmt::format(" [sp+0x{:x}]={}", i * 4, thread_dump_name_addr(kern, *word));
-                    found++;
-                }
-            }
+            const std::string stack_desc = thread_dump_stack_of(kern, pr, sp, 12);
 
             LOG_INFO(KERNEL, "TDUMP {} / {} state={} wait={} reqcnt={} pc={} lr={} sp=0x{:x} r0=0x{:x} r1=0x{:x} r2=0x{:x} r3=0x{:x} r4=0x{:x} |{}",
                 pr ? pr->name() : std::string("?"), thr->name(), static_cast<int>(thr->current_state()), wait_desc,
