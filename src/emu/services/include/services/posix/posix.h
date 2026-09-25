@@ -128,6 +128,7 @@ namespace eka2l1 {
         void chdir(service::ipc_context &ctx);
         void mkdir(service::ipc_context &ctx);
         void unlink(service::ipc_context &ctx);
+        void rename(service::ipc_context &ctx);
 
         void dup(service::ipc_context &ctx);
         void dup2(service::ipc_context &ctx);

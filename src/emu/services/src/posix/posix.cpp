@@ -403,6 +403,50 @@ namespace eka2l1 {
         POSIX_REQUEST_FINISH_WITH_ERR(ctx, removed ? 0 : EACCES);
     }
 
+    // rename(2): estlib passes the old and new names in cwptr[0] and cwptr[1]. As in POSIX, an existing file at the
+    // new name is replaced. Opera 6 renames its cache/visited-link journals (*.new) over the old files on Exit; with no
+    // PMrename the call failed with KErrNotSupported and estlib panicked Web with POSIXIF 24.
+    void posix_server::rename(service::ipc_context &ctx) {
+        POSIX_REQUEST_INIT(ctx);
+
+        const std::optional<std::u16string> old_name = read_guest_path(own_process, params->cwptr[0]);
+        const std::optional<std::u16string> new_name = read_guest_path(own_process, params->cwptr[1]);
+        if (!old_name || !new_name) {
+            params->ret = -1;
+            POSIX_REQUEST_FINISH_WITH_ERR(ctx, EFAULT);
+        }
+
+        const std::u16string old_path = eka2l1::absolute_path(*old_name, working_dir, true);
+        const std::u16string new_path = eka2l1::absolute_path(*new_name, working_dir, true);
+        io_system *io = ctx.sys->get_io_system();
+
+        if (!io->exist(old_path)) {
+            params->ret = -1;
+            POSIX_REQUEST_FINISH_WITH_ERR(ctx, ENOENT);
+        }
+
+        if (common::compare_ignore_case(old_path, new_path) == 0) {
+            params->ret = 0;
+            POSIX_REQUEST_FINISH(ctx);
+        }
+
+        if (io->exist(new_path)) {
+            if (io->is_directory(new_path) != io->is_directory(old_path)) {
+                params->ret = -1;
+                POSIX_REQUEST_FINISH_WITH_ERR(ctx, io->is_directory(new_path) ? EISDIR : ENOTDIR);
+            }
+
+            if (!io->delete_entry(new_path)) {
+                params->ret = -1;
+                POSIX_REQUEST_FINISH_WITH_ERR(ctx, EACCES);
+            }
+        }
+
+        const bool renamed = io->rename(old_path, new_path);
+        params->ret = renamed ? 0 : -1;
+        POSIX_REQUEST_FINISH_WITH_ERR(ctx, renamed ? 0 : EACCES);
+    }
+
     void posix_server::open(service::ipc_context &ctx) {
         POSIX_REQUEST_INIT(ctx);
 
@@ -655,6 +699,7 @@ namespace eka2l1 {
         REGISTER_IPC(posix_server, chdir, PMchdir, "Posix::Chdir");
         REGISTER_IPC(posix_server, mkdir, PMmkdir, "Posix::Mkdir");
         REGISTER_IPC(posix_server, unlink, PMunlink, "Posix::Unlink");
+        REGISTER_IPC(posix_server, rename, PMrename, "Posix::Rename");
         REGISTER_IPC(posix_server, open, PMopen, "Posix::Open");
         REGISTER_IPC(posix_server, close, PMclose, "Posix::Close");
         REGISTER_IPC(posix_server, read, PMread, "Posix::Read");
