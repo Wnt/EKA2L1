@@ -1641,10 +1641,11 @@ namespace eka2l1 {
         registry.get_launch_parameter(executable_to_run, parameter);
 
         if (kern->is_eka1() && sys->is_s80_device_active() && !document_given
-            && (parameter.launch_cmd_ == epoc::apa::command_create)) {
+            && ((parameter.launch_cmd_ == epoc::apa::command_create) || (parameter.launch_cmd_ == epoc::apa::command_open))) {
             // Series 80's application buttons and Desk start an application with EApaCommandRun and no document.
             // A Create command asks the application to make a new document instead, and Opera then never loads
-            // its home page: the page stays blank and the status pane empty.
+            // its home page: the page stays blank and the status pane empty. An Open of the defaulted document
+            // (the app's own name) makes Opera try to open "opera" and raise an error dialog.
             parameter.launch_cmd_ = epoc::apa::command_run;
             parameter.document_name_.clear();
         }
