@@ -84,53 +84,63 @@ namespace eka2l1::epoc {
         return (dsp == epoc::display_mode::color16) || (dsp == epoc::display_mode::color256);
     }
 
-    static char *converted_one_bpp_to_twenty_four_bpp_bitmap(epoc::bitwise_bitmap *bw_bmp,
-        const std::uint32_t *original_ptr, std::size_t &raw_size) {
-        std::uint32_t byte_width_converted = common::align(bw_bmp->header_.size_pixels.x * 3, 4);
-        raw_size = byte_width_converted * bw_bmp->header_.size_pixels.y;
+    std::uint32_t sub_byte_bitmap_scanline_bytes(const std::int32_t width, const std::uint32_t bpp) {
+        // CFbsBitmap::ScanLineLength: a scan line is padded to whole 32-bit words.
+        return ((static_cast<std::uint32_t>(width) * bpp + 31) / 32) * 4;
+    }
 
-        char *return_ptr = new char[raw_size];
+    char *expand_sub_byte_bitmap_to_24bpp(const std::uint8_t *data, const eka2l1::object_size &size, const std::uint32_t bpp,
+        std::uint32_t stride, const common::rgba *palette, std::size_t &raw_size) {
+        // Pixels are packed from the least significant bit of each byte up (pixel 0 in bits 0..bpp-1).
+        // Without a palette the value is a grey level, 0 black to (2^bpp - 1) white; with one it is an
+        // index into it (0x00BBGGRR entries). The texture is 24bpp in the BGR byte order the cache uploads.
+        raw_size = 0;
+        if ((bpp != 1) && (bpp != 2) && (bpp != 4)) {
+            return nullptr;
+        }
 
-        for (std::size_t y = 0; y < bw_bmp->header_.size_pixels.y; y++) {
-            for (std::size_t x = 0; x < bw_bmp->header_.size_pixels.x; x++) {
-                std::uint32_t word_per_line = (bw_bmp->header_.size_pixels.x + 31) / 32;
-                std::uint32_t color = original_ptr[y * word_per_line + x / 32];
-                std::uint32_t converted_color = 0;
-                if (color & (1 << (x & 0x1F))) {
-                    converted_color = 0xFFFFFF;
+        if (stride == 0) {
+            stride = sub_byte_bitmap_scanline_bytes(size.x, bpp);
+        }
+
+        const std::uint32_t out_stride = common::align(static_cast<std::uint32_t>(size.x) * 3, 4);
+        raw_size = static_cast<std::size_t>(out_stride) * size.y;
+
+        char *out = new char[raw_size];
+        std::memset(out, 0, raw_size);
+
+        const std::uint32_t max_level = (1U << bpp) - 1;
+        const std::uint32_t pixels_per_byte = 8 / bpp;
+
+        for (std::int32_t y = 0; y < size.y; y++) {
+            const std::uint8_t *line = data + static_cast<std::size_t>(y) * stride;
+            char *out_line = out + static_cast<std::size_t>(y) * out_stride;
+
+            for (std::int32_t x = 0; x < size.x; x++) {
+                const std::uint32_t shift = (static_cast<std::uint32_t>(x) % pixels_per_byte) * bpp;
+                const std::uint32_t value = (line[x / pixels_per_byte] >> shift) & max_level;
+
+                std::uint8_t r, g, b;
+                if (palette) {
+                    const common::rgba colour = palette[value];
+                    r = colour & 0xFF;
+                    g = (colour >> 8) & 0xFF;
+                    b = (colour >> 16) & 0xFF;
+                } else {
+                    r = g = b = static_cast<std::uint8_t>((value * 255) / max_level);
                 }
 
-                std::memcpy(return_ptr + byte_width_converted * y + x * 3, reinterpret_cast<const char *>(&converted_color), 3);
-            }
-        }
-        return return_ptr;
-    }
-    
-    static char *converted_gray_four_bpp_to_twenty_four_bpp_bitmap(epoc::bitwise_bitmap *bw_bmp,
-        const std::uint8_t *original_ptr, std::size_t &raw_size) {
-        std::uint32_t byte_width_converted = common::align(bw_bmp->header_.size_pixels.x * 3, 4);
-        raw_size = byte_width_converted * bw_bmp->header_.size_pixels.y;
-
-        char *return_ptr = new char[raw_size];
-        std::uint32_t scan_line_size = ((bw_bmp->header_.size_pixels.x + 7) >> 3) << 2;
-
-        for (std::size_t y = 0; y < bw_bmp->header_.size_pixels.y; y++) {
-            for (std::size_t x = 0; x < bw_bmp->header_.size_pixels.x / 2; x++) {
-                std::uint8_t gray_pack = original_ptr[y * scan_line_size + x];
-                std::uint8_t converted_color_comp_first = (gray_pack & 0xF) | ((gray_pack & 0xF) << 4);
-                std::uint8_t converted_color_comp_second = ((gray_pack & 0xF0) >> 4) | (gray_pack & 0xF0);
-
-                std::memset(return_ptr + y * byte_width_converted + x * 3 * 2, converted_color_comp_first, 3);
-                std::memset(return_ptr + y * byte_width_converted + x * 3 * 2 + 3, converted_color_comp_second, 3);
+                out_line[x * 3] = static_cast<char>(b);
+                out_line[x * 3 + 1] = static_cast<char>(g);
+                out_line[x * 3 + 2] = static_cast<char>(r);
             }
         }
 
-        return return_ptr;
+        return out;
     }
 
     static char *converted_palette_bitmap_to_twenty_four_bitmap(epoc::bitwise_bitmap *bw_bmp,
-        const std::uint8_t *original_ptr, epoc::palette_256 &the_palette, epoc::palette_16 &the_palette_16,
-        std::size_t &raw_size) {
+        const std::uint8_t *original_ptr, epoc::palette_256 &the_palette, std::size_t &raw_size) {
         std::uint32_t byte_width_converted = common::align(bw_bmp->header_.size_pixels.x * 3, 4);
         raw_size = byte_width_converted * bw_bmp->header_.size_pixels.y;
         char *return_ptr = new char[raw_size];
@@ -140,13 +150,8 @@ namespace eka2l1::epoc {
             dsp = bw_bmp->settings_.initial_display_mode();
         }
 
-        std::uint32_t skip_width = 1;
-        if (dsp == epoc::display_mode::color16) {
-            skip_width = 2;
-        }
-
         for (std::size_t y = 0; y < bw_bmp->header_.size_pixels.y; y++) {
-            for (std::size_t x = 0; x < bw_bmp->header_.size_pixels.x / skip_width; x++) {
+            for (std::size_t x = 0; x < bw_bmp->header_.size_pixels.x; x++) {
                 switch (dsp) {
                 case epoc::display_mode::color256: {
                     const std::uint8_t palette_index = original_ptr[y * bw_bmp->byte_width_ + x];
@@ -157,23 +162,6 @@ namespace eka2l1::epoc {
                     return_ptr[location + 1] = (palette_color >> 8) & 0xFF;
                     return_ptr[location] = (palette_color >> 16) & 0xFF;
 
-                    break;
-                }
-
-                case epoc::display_mode::color16: {
-                    const std::uint8_t palette_index_for_two = original_ptr[y * bw_bmp->byte_width_ + x];
-                    const std::uint32_t palette_color_first = the_palette[palette_index_for_two & 0xFFFF];
-                    const std::uint32_t palette_color_second = the_palette[(palette_index_for_two >> 4) & 0xFFFF];
-                    const std::size_t location = byte_width_converted * y + x * 3 * 2;
-
-                    return_ptr[location + 2] = palette_color_first & 0xFF;
-                    return_ptr[location + 1] = (palette_color_first >> 8) & 0xFF;
-                    return_ptr[location] = (palette_color_first >> 16) & 0xFF;
-
-                    return_ptr[location + 5] = palette_color_second & 0xFF;
-                    return_ptr[location + 4] = (palette_color_second >> 8) & 0xFF;
-                    return_ptr[location + 3] = (palette_color_second >> 16) & 0xFF;
-                    
                     break;
                 }
 
@@ -193,7 +181,9 @@ namespace eka2l1::epoc {
             return 32;
         }
 
-        if (is_palette_bitmap(bmp) || (bmp->header_.bit_per_pixels == 1) || (bmp->header_.bit_per_pixels == 4)) {
+        // Palette bitmaps and every depth below a byte (EGray2, EGray4, EGray16, EColor16) are expanded
+        // on the CPU: the driver has no texture format for them.
+        if (is_palette_bitmap(bmp) || (bmp->header_.bit_per_pixels < 8)) {
             return 24;
         }
 
@@ -512,15 +502,41 @@ namespace eka2l1::epoc {
                 }
 
                 // GPU don't support them. Convert them on CPU
-                if (is_palette_bitmap(bmp) || (dsp == epoc::display_mode::gray16)) {
-                    char *new_pointer = nullptr;
-                    if (dsp == epoc::display_mode::gray16) {
-                        new_pointer = converted_gray_four_bpp_to_twenty_four_bpp_bitmap(bmp, reinterpret_cast<const std::uint8_t *>(data_pointer), raw_size_big);
-                    } else {
-                        new_pointer = converted_palette_bitmap_to_twenty_four_bitmap(bmp, reinterpret_cast<const std::uint8_t *>(data_pointer),
-                            epoc::get_suitable_palette_256(kern->get_epoc_version(), kern->get_system()->is_s80_device_active()),
-                            epoc::color_16_palette, raw_size_big);
+                if (bpp < 8) {
+                    // EGray2/EGray4/EGray16 grey levels or EColor16 indices. EGray4 used to reach the driver
+                    // raw with no texture format for 2bpp, so it sampled nothing: a Series 80 icon mask in
+                    // EGray4 (Opera's Go to address drop-down arrow and globe), drawn inverted, let the
+                    // whole source through and its magenta key colour showed.
+                    const common::rgba *palette = (dsp == epoc::display_mode::color16) ? epoc::color_16_palette.data() : nullptr;
+                    // The header's byte width is the stride, unless it would read past the pixels this bitmap has.
+                    std::uint32_t stride = static_cast<std::uint32_t>(bmp->byte_width_);
+                    if (static_cast<std::uint64_t>(stride) * bmp->header_.size_pixels.y > raw_size) {
+                        stride = 0;
                     }
+
+                    char *new_pointer = nullptr;
+                    if (static_cast<std::uint64_t>(sub_byte_bitmap_scanline_bytes(bmp->header_.size_pixels.x, bpp)) * bmp->header_.size_pixels.y <= raw_size) {
+                        new_pointer = expand_sub_byte_bitmap_to_24bpp(reinterpret_cast<const std::uint8_t *>(data_pointer),
+                            bmp->header_.size_pixels, bpp, stride, palette, raw_size_big);
+                    }
+
+                    if (!new_pointer) {
+                        // Too few pixels for the size it claims: upload a blank texture of the right size
+                        // rather than let the driver read the short buffer as 24bpp.
+                        raw_size_big = static_cast<std::size_t>(common::align(static_cast<std::uint32_t>(bmp->header_.size_pixels.x) * 3, 4)) * bmp->header_.size_pixels.y;
+                        new_pointer = new char[raw_size_big];
+                        std::memset(new_pointer, 0, raw_size_big);
+                    }
+
+                    delete[] data_pointer;
+                    data_pointer = new_pointer;
+                    raw_size = static_cast<std::uint32_t>(raw_size_big);
+
+                    bpp = 24;
+                    pixels_per_line = 0;
+                } else if (is_palette_bitmap(bmp)) {
+                    char *new_pointer = converted_palette_bitmap_to_twenty_four_bitmap(bmp, reinterpret_cast<const std::uint8_t *>(data_pointer),
+                        epoc::get_suitable_palette_256(kern->get_epoc_version(), kern->get_system()->is_s80_device_active()), raw_size_big);
 
                     bpp = 24;
                     raw_size = static_cast<std::uint32_t>(raw_size_big);
@@ -530,27 +546,6 @@ namespace eka2l1::epoc {
 
                     // Use default
                     pixels_per_line = 0;
-                }
-
-                char *newly_pointer = nullptr;
-
-                switch (bpp) {
-                case 1:
-                    newly_pointer = converted_one_bpp_to_twenty_four_bpp_bitmap(bmp, reinterpret_cast<const std::uint32_t *>(data_pointer),
-                        raw_size_big);
-                    bpp = 24;
-                    raw_size = static_cast<std::uint32_t>(raw_size_big);
-                    pixels_per_line = 0;
-
-                    break;
-
-                default:
-                    break;
-                }
-
-                if (newly_pointer) {
-                    delete[] data_pointer;
-                    data_pointer = newly_pointer;
                 }
             }
 
