@@ -18,6 +18,8 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <vfs/rom_wserv.h>
+#include <cstdlib>
 #include <common/algorithm.h>
 #include <common/cvt.h>
 #include <common/fileutils.h>
@@ -82,14 +84,22 @@ namespace eka2l1 {
 
         std::uint8_t *file_ptr;
         std::u16string input_path;
+        std::u16string boot_config;
 
         explicit rom_file(memory_system *mem, loader::rom *supreme_mother, loader::rom_entry entry,
-            const std::u16string &inpp)
+            const std::u16string &inpp, bool controlled_wserv = false)
             : parent(supreme_mother)
             , file(entry)
             , mem(mem)
             , input_path(inpp) {
             file_ptr = ptr<std::uint8_t>(file.address_lin).get(mem);
+            if (controlled_wserv && file_ptr && file.size % 2 == 0) {
+                boot_config.resize(file.size / 2);
+                std::memcpy(boot_config.data(), file_ptr, file.size);
+                configure_rom_wserv_startup(boot_config);
+                file.size = static_cast<std::uint32_t>(boot_config.size() * 2);
+                file_ptr = reinterpret_cast<std::uint8_t *>(boot_config.data());
+            }
             crr_pos = 0;
         }
 
@@ -123,6 +133,9 @@ namespace eka2l1 {
         }
 
         std::uint64_t seek(std::int64_t seek_off, file_seek_mode where) override {
+            if (where == file_seek_mode::address && !boot_config.empty()) {
+                return 0xFFFFFFFFFFFFFFFF;
+            }
             if (where == file_seek_mode::beg || where == file_seek_mode::address) {
                 if (seek_off < 0) {
                     LOG_ERROR(VFS, "Attempting to seek set with negative offset ({})", seek_off);
@@ -166,11 +179,11 @@ namespace eka2l1 {
         }
 
         bool is_in_rom() const override {
-            return true;
+            return boot_config.empty();
         }
 
         address rom_address() const override {
-            return file.address_lin;
+            return boot_config.empty() ? file.address_lin : 0;
         }
 
         uint64_t tell() override {
@@ -1133,7 +1146,10 @@ namespace eka2l1 {
                 return ff;
             }
 
-            return std::make_unique<rom_file>(mem, rom_cache, *entry, path);
+            const bool controlled_wserv = ver == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV")
+                && !std::getenv("EKA2L1_ROM_STARTER")
+                && common::compare_ignore_case(new_path, std::u16string(u"Z:\\system\\data\\wsini.ini")) == 0;
+            return std::make_unique<rom_file>(mem, rom_cache, *entry, path, controlled_wserv);
         }
 
         std::optional<entry_info> get_entry_info(const std::u16string &path) override {
@@ -1153,6 +1169,12 @@ namespace eka2l1 {
             info.has_raw_attribute = true;
             info.raw_attribute = entry->attrib;
             info.size = entry->size;
+            if (ver == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV")
+                && !std::getenv("EKA2L1_ROM_STARTER")
+                && common::compare_ignore_case(path, std::u16string(u"Z:\\system\\data\\wsini.ini")) == 0) {
+                rom_file config(mem, rom_cache, *entry, path, true);
+                info.size = config.size();
+            }
             info.name = common::ucs2_to_utf8(entry->name);
             info.full_path = common::ucs2_to_utf8(path);
 
