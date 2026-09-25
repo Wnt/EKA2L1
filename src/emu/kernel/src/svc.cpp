@@ -49,6 +49,7 @@
 #include <utils/system.h>
 
 #include <ctime>
+#include <set>
 #include <utils/err.h>
 
 namespace eka2l1 {
@@ -190,7 +191,9 @@ namespace eka2l1::epoc {
     BRIDGE_FUNC(eka2l1::ptr<void>, trap_handler) {
         kernel::thread_local_data *local_data = current_local_data(kern);
         // Diagnostic (env EKA2L1_TRAP_TRACE): on EKA1 both User::Leave() and TTrap::UnTrap() ask for the
-        // trap handler, a leave with its code still in a low register. Log r0/r4/r5 per call, and the
+        // trap handler, a leave with its code still in a low register. So do the CleanupStack functions
+        // (PopAndDestroy finds the cleanup stack through it): a -1 there is a caller's register, not a leave
+        // (Telephone's "cannot call" note looked like a KErrNotFound leave in its image line this way). Log r0/r4/r5 per call, and the
         // guest stack when either looks like a small error code (a likely leave, e.g. -1 KErrNotFound).
         static const bool trap_trace = std::getenv("EKA2L1_TRAP_TRACE") != nullptr;
         if (trap_trace) {
@@ -202,6 +205,59 @@ namespace eka2l1::epoc {
             const std::int32_t r4 = static_cast<std::int32_t>(cpu->get_reg(4));
             if (((r0 < 0) && (r0 > -100)) || ((r4 < 0) && (r4 > -100))) {
                 eka2l1::log_guest_panic_stack(kern, kern->crr_thread());
+
+                // EKA2L1_TRAP_TRACE_STRINGS: the descriptors the leaving code still has on its stack (a file
+                // name it failed to open, a resource string), read as HBufC16/TBufC16 images or TPtrC16s.
+                static const bool trace_strings = std::getenv("EKA2L1_TRAP_TRACE_STRINGS") != nullptr;
+                if (trace_strings) {
+                    kernel::process *pr = kern->crr_process();
+                    const std::uint32_t sp = cpu->get_reg(13);
+                    auto word_at = [pr](const std::uint32_t addr, std::uint32_t &out) {
+                        const std::uint32_t *w = eka2l1::ptr<const std::uint32_t>(addr).get(pr);
+                        if (!w) {
+                            return false;
+                        }
+                        out = *w;
+                        return true;
+                    };
+                    auto text_at = [pr](const std::uint32_t addr, const std::uint32_t len, std::string &out) {
+                        if ((len < 3) || (len > 256)) {
+                            return false;
+                        }
+                        const char16_t *chars = eka2l1::ptr<const char16_t>(addr).get(pr);
+                        const char16_t *last = eka2l1::ptr<const char16_t>(addr + (len - 1) * 2).get(pr);
+                        if (!chars || !last) {
+                            return false;
+                        }
+                        std::u16string str(chars, len);
+                        for (const char16_t c : str) {
+                            if ((c < 0x20) || (c > 0x7E)) {
+                                return false;
+                            }
+                        }
+                        out = common::ucs2_to_utf8(str);
+                        return true;
+                    };
+                    std::set<std::uint32_t> seen;
+                    for (std::uint32_t off = 0; off < 0x400; off += 4) {
+                        std::uint32_t p = 0;
+                        if (!word_at(sp + off, p) || (p < 0x400000) || seen.count(p)) {
+                            continue;
+                        }
+                        seen.insert(p);
+                        std::uint32_t header = 0;
+                        std::uint32_t second = 0;
+                        if (!word_at(p, header)) {
+                            continue;
+                        }
+                        const std::uint32_t len = header & 0x0FFFFFFF;
+                        std::string text;
+                        if (text_at(p + 4, len, text) || (word_at(p + 4, second) && text_at(second, len, text))
+                            || (word_at(p + 8, second) && text_at(p + 8, len, text))) {
+                            LOG_TRACE(KERNEL, "  leave string [sp+0x{:X}] -> 0x{:X}: \"{}\"", off, p, text);
+                        }
+                    }
+                }
             }
         }
         return local_data->trap_handler;

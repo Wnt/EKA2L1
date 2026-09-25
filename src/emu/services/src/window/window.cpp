@@ -2026,6 +2026,15 @@ namespace eka2l1 {
 
         bool shipped = false;
 
+        // A Series 80 system note is modal: it takes the key presses until it is answered. Releases still go
+        // through, so a key held when the note came up is let go on the device too.
+        if (s80_note_ && ((input_event.type_ == drivers::input_event_type::key) || (input_event.type_ == drivers::input_event_type::key_raw))
+            && (input_event.key_.state_ == drivers::key_state::pressed) && s80_note_->active()) {
+            if (s80_note_->handle_key_press(static_cast<std::uint32_t>(input_event.key_.code_))) {
+                return;
+            }
+        }
+
         // Translate host event to guest event
         switch (input_event.type_) {
         case drivers::input_event_type::key:
@@ -2321,6 +2330,15 @@ namespace eka2l1 {
             scr->need_update_visible_regions(true);
             scr->flags_ |= epoc::screen::FLAG_SERVER_REDRAW_PENDING;
         }
+    }
+
+    bool window_server::s80_show_note(const std::u16string &title, const std::u16string &text, const std::u16string &button1,
+        const std::u16string &button2, std::function<void(int)> done) {
+        if (!s80_note_) {
+            s80_note_ = std::make_unique<epoc::s80_note>(this);
+        }
+
+        return s80_note_->show(title, text, button1, button2, std::move(done));
     }
 
     bool window_server::switch_to_app(const std::uint32_t app_uid, const char *why) {

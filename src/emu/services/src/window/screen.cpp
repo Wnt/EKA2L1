@@ -552,6 +552,12 @@ namespace eka2l1::epoc {
             flags_ |= FLAG_SERVER_REDRAW_PENDING;
         }
 
+        // A system note is drawn over everything, so any change under it recomposes the whole screen.
+        const bool note_up = note && note->active();
+        if (note_up) {
+            flags_ |= FLAG_SERVER_REDRAW_PENDING;
+        }
+
         // A clock that ticked is drawn by walking the windows, so it rules out the in-place caret flip.
         const bool anims_due = anims_need_redraw();
 
@@ -625,6 +631,11 @@ namespace eka2l1::epoc {
         }
 
         text_cursor_drawn = cursor_shown;
+
+        if (note_up) {
+            note->draw(builder, this);
+            adrawwalker.total_redrawed_++;
+        }
 
         // What an in-place flip must match. A frame that composed everything is a known base either way.
         text_cursor_geometry_valid = cursor_present && ((flags_ & FLAG_SERVER_REDRAW_PENDING) != 0);
