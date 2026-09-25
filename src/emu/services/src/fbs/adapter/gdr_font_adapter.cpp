@@ -120,6 +120,31 @@ namespace eka2l1::epoc::adapter {
         return true;
     }
 
+    bool gdr_font_file_adapter::get_bitmap_typeface_support(const std::size_t idx, std::uint32_t &flags, std::vector<std::int32_t> &heights) {
+        if (!is_valid() || (idx >= store_.typefaces_.size())) {
+            return false;
+        }
+
+        const loader::gdr::typeface &the_typeface = store_.typefaces_[idx];
+
+        // The TTypeface flags as the GDR stores them (FNTSTORE internalizes TTypeface as is).
+        flags = the_typeface.header_.flags_;
+        heights.clear();
+
+        for (std::size_t i = 0; i < the_typeface.font_bitmaps_.size(); i++) {
+            std::int32_t height = the_typeface.font_bitmaps_[i]->header_.cell_height_in_pixels_;
+            if (i < the_typeface.header_.bitmap_headers_.size()) {
+                height *= std::max<std::int32_t>(1, the_typeface.header_.bitmap_headers_[i].height_factor_);
+            }
+            heights.push_back(height);
+        }
+
+        std::sort(heights.begin(), heights.end());
+        heights.erase(std::unique(heights.begin(), heights.end()), heights.end());
+
+        return !heights.empty();
+    }
+
     const loader::gdr::character *gdr_font_file_adapter::get_character(const std::size_t idx, std::uint32_t code, const std::uint32_t metric_identifier) {
         if (!is_valid() || (idx >= store_.typefaces_.size())) {
             return nullptr;

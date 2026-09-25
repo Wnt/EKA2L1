@@ -27,6 +27,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <initializer_list>
 #include <memory>
 
 namespace eka2l1::drivers {
@@ -47,7 +49,8 @@ namespace eka2l1::epoc {
         gdi_store_command_set_clip_rect_single,
         gdi_store_command_set_clip_rect_multiple,
         gdi_store_command_disable_clip,
-        gdi_store_command_update_texture
+        gdi_store_command_update_texture,
+        gdi_store_command_set_draw_mode ///< State: the CGraphicsContext::TDrawMode the following draws use.
     };
 
     // Whether replaying this opcode puts any pixel on the target. The clipping
@@ -67,6 +70,65 @@ namespace eka2l1::epoc {
             return false;
         }
     }
+
+    // CGraphicsContext::TDrawMode (GDI.H): components EInvertScreen 1, EXor 2, EOr 4, EAnd 8,
+    // EInvertPen 16, EPenmode 32, EWriteAlpha 64.
+    enum gdi_draw_mode : std::uint32_t {
+        gdi_draw_mode_invert_screen = 1,
+        gdi_draw_mode_xor = 2,
+        gdi_draw_mode_or = 4,
+        gdi_draw_mode_and = 8,
+        gdi_draw_mode_logical_op = gdi_draw_mode_xor | gdi_draw_mode_or | gdi_draw_mode_and,
+        gdi_draw_mode_invert_pen = 16,
+        gdi_draw_mode_pen = 32,
+        gdi_draw_mode_write_alpha = 64,
+
+        gdi_draw_mode_notscreen = gdi_draw_mode_invert_screen,
+        gdi_draw_mode_notpen = gdi_draw_mode_invert_pen | gdi_draw_mode_pen
+    };
+
+    struct gdi_store_command_set_draw_mode_data {
+        std::uint32_t mode_;
+    };
+
+    // One pass of a TDrawMode emulated with fixed-function blending: out.rgb = src * src_factor + dst * dst_factor,
+    // where src is the colour below (pen or brush, maybe inverted) and dst the pixel already on the target.
+    // Colours are 0..1 per channel, so the logical ops are exact for 0/1 channel values and a smooth
+    // approximation between them (XOR = S + D - 2SD, AND = SD, OR = S + D - SD).
+    struct gdi_draw_mode_pass {
+        eka2l1::vec4 color_;
+        drivers::blend_factor src_factor_;
+        drivers::blend_factor dst_factor_;
+    };
+
+    // Expands a draw mode and the pen/brush colour (0..255 per channel) into blend passes. Returns 0 for the
+    // plain modes (PEN, WriteAlpha, NOTPEN) that draw with normal blending: color is then only updated
+    // (inverted for NOTPEN). At most 2 passes.
+    std::uint32_t gdi_expand_draw_mode(const std::uint32_t mode, eka2l1::vec4 &color, gdi_draw_mode_pass *passes);
+
+    /**
+     * @brief CFbsBitGc::DrawRect split into pixels that are each painted once.
+     *
+     * With a pen, the brush fills only the part of the rectangle the pen leaves (`fill`, when `has_fill`),
+     * and the pen is four edges that do not overlap: a band `pen_size / 2` outside the rectangle's edge and
+     * the rest inside it. Painting every pixel once matters in the logical draw modes (NOTSCREEN, XOR),
+     * where a pixel painted twice flips back.
+     */
+    struct gdi_rect_outline {
+        eka2l1::rect fill;
+        bool has_fill = false;
+        eka2l1::rect edges[4];
+        std::size_t edge_count = 0;
+    };
+
+    gdi_rect_outline gdi_split_rect_outline(const eka2l1::rect &area, const eka2l1::vec2 &pen_size);
+
+    /**
+     * @brief The pixels CFbsBitGc::DrawLine paints for an axis-aligned line: from the start point up to but
+     *        not including the end point, whichever way it runs, with the pen of width w centred on it
+     *        (w / 2 before the line). A line that starts and ends on the same point is one pen dot.
+     */
+    eka2l1::rect gdi_axis_line_rect(const eka2l1::vec2 &start, const eka2l1::vec2 &end, const eka2l1::vec2 &pen_size);
 
     struct gdi_store_command_draw_rect_data {
         eka2l1::vec4 color_;
@@ -213,6 +275,10 @@ namespace eka2l1::epoc {
         void add_command(gdi_store_command &cmd, bitmap_cache *cache = nullptr);
     };
 
+    // The part of a segment's window that its commands paint opaquely (plain-mode opaque fills and
+    // unmasked blits of bitmaps without alpha), clipped as the replay clips them.
+    common::region gdi_store_segment_opaque_coverage(const gdi_store_command_segment &segment);
+
     class gdi_store_command_collection {
     private:
         std::vector<std::unique_ptr<gdi_store_command_segment>> segments_;
@@ -222,11 +288,15 @@ namespace eka2l1::epoc {
         static constexpr std::uint32_t LIMIT_NON_REDRAW_SEGMENTS = 20;
         static constexpr std::int32_t KEEP_NON_REDRAW_SEGMENTS = 12;
         static constexpr std::uint64_t AGE_LIMIT_NONREDRAW_US = 1000000;
+        static constexpr std::size_t LIMIT_REDRAW_SEGMENTS = 32;
 
         explicit gdi_store_command_collection();
 
         gdi_store_command_segment *add_new_segment(const eka2l1::rect &draw_rect, const gdi_store_command_segment_type type_);
-        void promote_last_segment();
+        // Ends a redraw. background_clears: the window has a background colour, so the redraw rectangle
+        // was cleared and replaces everything older under it. Without one, only what the redraw paints
+        // opaquely replaces older content (gdi_store_segment_opaque_coverage).
+        void promote_last_segment(const bool background_clears = true);
         
         // Returns true if this must cause an invalidation
         bool clean_old_nonredraw_segments();
@@ -241,6 +311,15 @@ namespace eka2l1::epoc {
         }
     };
 
+    // Builds texture update commands (gdi_store_command_update_texture) and submits them to the driver at
+    // once, so an upload the bitmap cache has promised never depends on some window being drawn later.
+    void gdi_submit_texture_updates(drivers::graphics_driver *driver, bitmap_cache &bcache,
+        std::initializer_list<const gdi_store_command *> updates);
+
+    // The rectangle a BitBltMasked with a brush fills before the masked draw: the blitted part of the
+    // source (all of it for an empty source rectangle), clipped to the source bitmap.
+    eka2l1::rect masked_blit_brush_area(const eka2l1::vec2 &dest_top, const eka2l1::rect &source_rect, const eka2l1::vec2 &bitmap_size);
+
     class gdi_command_builder {
     private:
         drivers::graphics_driver *driver_;
@@ -251,6 +330,11 @@ namespace eka2l1::epoc {
         common::region clip_;
         drivers::filter_option texture_filter_;
         bool premultiplied_target_;
+        std::uint32_t draw_mode_ = gdi_draw_mode_pen;
+
+        // Runs draw once per blend pass of the current draw mode, with the pass's colour as brush colour.
+        void draw_with_mode(const eka2l1::vec4 &color, const std::function<void()> &draw);
+        void build_line_geometry(const gdi_store_command_draw_line_data &cmd);
 
     public:
         explicit gdi_command_builder(drivers::graphics_driver *drv, drivers::graphics_command_builder &builder, bitmap_cache &bcache,

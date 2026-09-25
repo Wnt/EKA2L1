@@ -25,10 +25,13 @@ set(CORE_TEST_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/services/applist/registeration.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/applist/recognize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/applist/data_type.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/services/applist/icon_by_uid.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/bitmap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/fontmatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/gdrmetrics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/pen_advance.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/linkedfont.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/services/fbs/typeface_support.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/svg_icon.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/sensor/buffering.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/sensor/rotation.cpp
@@ -40,6 +43,8 @@ set(CORE_TEST_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/redraw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/note.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/msv/entry_data.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/services/window/draw_mode.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/services/window/gdi_geometry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/fs_root.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/store_textures.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/centralrepo/crebinloader.cpp

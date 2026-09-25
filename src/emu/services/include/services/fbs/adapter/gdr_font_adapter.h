@@ -61,6 +61,8 @@ namespace eka2l1::epoc::adapter {
 
         bool get_face_attrib(const std::size_t idx, open_font_face_attrib &face_attrib) override;
 
+        bool get_bitmap_typeface_support(const std::size_t idx, std::uint32_t &flags, std::vector<std::int32_t> &heights) override;
+
         std::uint8_t *get_glyph_bitmap(const std::size_t idx, std::uint32_t code, const std::uint32_t metric_identifier,
             int *rasterized_width, int *rasterized_height, std::uint32_t &total_size, epoc::glyph_bitmap_type *bmp_type,
             open_font_character_metric &character_metric) override;

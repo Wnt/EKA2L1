@@ -38,6 +38,10 @@
 
 #include <utils/err.h>
 
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+
 namespace eka2l1::epoc {
     static void *decide_bitmap_pointer_to_pass(wsbitmap *server_bmp, std::uint8_t &affected_flags, const bool is_mask) {
         if (server_bmp->parent_) {
@@ -240,7 +244,7 @@ namespace eka2l1::epoc {
         fill_data.color_ = color_brush;
         fill_cmd.opcode_ = epoc::gdi_store_command_draw_rect;
 
-        attached_window->add_draw_command(fill_cmd);
+        add_moded_draw_command(fill_cmd);
         return true;
     }
 
@@ -491,6 +495,26 @@ namespace eka2l1::epoc {
         attached_window->add_draw_command(draw_bmp_cmd);
     }
 
+    void graphic_context::fill_masked_blit_background(const eka2l1::vec2 &dest_top, const eka2l1::rect &source_rect,
+        epoc::bitwise_bitmap *source, epoc::bitwise_bitmap *mask) {
+        // CFbsBitGc::BitBltMasked with a binary mask and a brush set fills the destination rectangle with
+        // the brush first, so the pixels the mask keeps out show the brush, not what was under them.
+        // Series 80's EikSrv relies on it: the focused dialog field under an open choice list and the
+        // list's scroll bar are masked blits over SetBrushStyle(ESolidBrush) + white, into windows with
+        // no background colour (the list rows blit with ENullBrush and keep their highlight). The
+        // alpha-blended (EGray256) path does not use the brush.
+        if ((fill_mode == brush_style::null) || !source || !mask) {
+            return;
+        }
+
+        const epoc::display_mode mask_mode = mask->settings_.current_display_mode();
+        if ((mask_mode == epoc::display_mode::gray256) || epoc::is_display_mode_alpha(mask_mode)) {
+            return;
+        }
+
+        fill_with_brush(epoc::masked_blit_brush_area(dest_top, source_rect, source->header_.size_pixels));
+    }
+
     void graphic_context::ws_draw_bitmap_masked(service::ipc_context &context, ws_cmd &cmd) {
         ws_cmd_draw_ws_bitmap_masked *blt_cmd = reinterpret_cast<ws_cmd_draw_ws_bitmap_masked *>(cmd.data_ptr);
 
@@ -542,6 +566,7 @@ namespace eka2l1::epoc {
         if (blt_cmd->invert_mask)
             flags |= 1;
 
+        fill_masked_blit_background(dest_rect.top, source_rect, bmp->final_clean()->bitmap_, masked->final_clean()->bitmap_);
         draw_mask_impl(bmp, masked, dest_rect, source_rect, flags);
         context.complete(epoc::error_none);
     }
@@ -572,6 +597,12 @@ namespace eka2l1::epoc {
         void *source_bmp_to_pass = decide_bitmap_pointer_to_pass(myside_source_bmp, flags, false);
         void *mask_bmp_to_pass = decide_bitmap_pointer_to_pass(myside_mask_bmp, flags, true);
 
+        epoc::bitwise_bitmap *source_bw = (flags & GDI_STORE_COMMAND_MAIN_RAW) ? reinterpret_cast<epoc::bitwise_bitmap *>(source_bmp_to_pass)
+                                                                              : reinterpret_cast<fbsbitmap *>(source_bmp_to_pass)->final_clean()->bitmap_;
+        epoc::bitwise_bitmap *mask_bw = (flags & GDI_STORE_COMMAND_MASK_RAW) ? reinterpret_cast<epoc::bitwise_bitmap *>(mask_bmp_to_pass)
+                                                                            : reinterpret_cast<fbsbitmap *>(mask_bmp_to_pass)->final_clean()->bitmap_;
+
+        fill_masked_blit_background(dest_rect.top, source_rect, source_bw, mask_bw);
         draw_mask_impl(source_bmp_to_pass, mask_bmp_to_pass, dest_rect, source_rect, flags);
         context.complete(epoc::error_none);
     }
@@ -672,7 +703,7 @@ namespace eka2l1::epoc {
             draw_line_data.end_ = end;
             draw_line_data.pen_size_ = pen_size;
 
-            attached_window->add_draw_command(cmd);
+            add_moded_draw_command(cmd);
         }
     }
 
@@ -750,31 +781,55 @@ namespace eka2l1::epoc {
 
         drivers::pen_style pen_style;
         eka2l1::vec4 pen_color;
-        epoc::gdi_store_command gdi_cmd;
 
-        // CFbsBitGc::DrawRect fills with the brush first and outlines with the pen on top.
-        fill_with_brush(area);
+        const bool has_pen = get_pen_color_and_style(pen_color, pen_style) && (pen_size.x > 0) && (pen_size.y > 0);
 
-        if (get_pen_color_and_style(pen_color, pen_style)) {
-            eka2l1::vec2 point_list[5] =  {
-                area.top,
-                area.top + eka2l1::vec2(area.size.x, 0),
-                area.top + area.size,
-                area.top + eka2l1::vec2(0, area.size.y),
-                area.top
-            };
+        // CFbsBitGc::DrawRect: the brush fills the part of the rectangle the pen does not cover, and the
+        // pen outline is four edges that never overlap. Every pixel is therefore painted exactly once,
+        // which matters in the logical draw modes: Series 80 Sheet draws and erases its cell cursor as
+        // 3-pixel bars in EDrawModeNOTSCREEN (brush + 1-pixel pen). Fill-then-outline inverted the edge
+        // pixels twice, leaving two thin lines instead of a solid bar, and the closed outline polyline
+        // ran one pixel past the right and bottom edges.
+        const epoc::gdi_rect_outline outline = epoc::gdi_split_rect_outline(area, has_pen ? pen_size : eka2l1::vec2(0, 0));
 
-            epoc::gdi_store_command_draw_polygon_data &cmd_data = gdi_cmd.get_data_struct<epoc::gdi_store_command_draw_polygon_data>();
+        if (outline.has_fill) {
+            fill_with_brush(outline.fill);
+        }
 
-            gdi_cmd.opcode_ = epoc::gdi_store_command_draw_polygon;
-            cmd_data.point_count_ = 5;
-            cmd_data.color_ = pen_color;
-            cmd_data.style_ = pen_style;
-            cmd_data.points_ = reinterpret_cast<eka2l1::point*>(gdi_cmd.allocate_dynamic_data(5 * sizeof(eka2l1::point)));
+        if (has_pen) {
+            if (pen_style == drivers::pen_style_solid) {
+                for (std::size_t i = 0; i < outline.edge_count; i++) {
+                    epoc::gdi_store_command edge_cmd;
+                    epoc::gdi_store_command_draw_rect_data &edge_data = edge_cmd.get_data_struct<epoc::gdi_store_command_draw_rect_data>();
 
-            std::memcpy(cmd_data.points_, point_list, 5 * sizeof(eka2l1::point));
+                    edge_data.rect_ = outline.edges[i];
+                    edge_data.color_ = pen_color;
+                    edge_cmd.opcode_ = epoc::gdi_store_command_draw_rect;
 
-            attached_window->add_draw_command(gdi_cmd);
+                    add_moded_draw_command(edge_cmd);
+                }
+            } else {
+                epoc::gdi_store_command gdi_cmd;
+                eka2l1::vec2 point_list[5] =  {
+                    area.top,
+                    area.top + eka2l1::vec2(area.size.x - 1, 0),
+                    area.top + area.size - eka2l1::vec2(1, 1),
+                    area.top + eka2l1::vec2(0, area.size.y - 1),
+                    area.top
+                };
+
+                epoc::gdi_store_command_draw_polygon_data &cmd_data = gdi_cmd.get_data_struct<epoc::gdi_store_command_draw_polygon_data>();
+
+                gdi_cmd.opcode_ = epoc::gdi_store_command_draw_polygon;
+                cmd_data.point_count_ = 5;
+                cmd_data.color_ = pen_color;
+                cmd_data.style_ = pen_style;
+                cmd_data.points_ = reinterpret_cast<eka2l1::point*>(gdi_cmd.allocate_dynamic_data(5 * sizeof(eka2l1::point)));
+
+                std::memcpy(cmd_data.points_, point_list, 5 * sizeof(eka2l1::point));
+
+                add_moded_draw_command(gdi_cmd);
+            }
         }
 
         context.complete(epoc::error_none);
@@ -799,7 +854,7 @@ namespace eka2l1::epoc {
             rect_draw_data.color_.w = 255;
         }
 
-        attached_window->add_draw_command(gdi_cmd);
+        add_moded_draw_command(gdi_cmd);
 
         // Draw rectangle
         context.complete(epoc::error_none);
@@ -827,7 +882,7 @@ namespace eka2l1::epoc {
             rect_draw_data.color_.w = 255;
         }
         
-        attached_window->add_draw_command(gdi_cmd);
+        add_moded_draw_command(gdi_cmd);
 
         // Draw rectangle
         context.complete(epoc::error_none);
@@ -848,7 +903,7 @@ namespace eka2l1::epoc {
             rect_draw_data.color_.w = 255;
         }
         
-        attached_window->add_draw_command(gdi_cmd);
+        add_moded_draw_command(gdi_cmd);
         context.complete(epoc::error_none);
     }
 
@@ -870,6 +925,7 @@ namespace eka2l1::epoc {
 
         underline = false;
         strikethrough = false;
+        draw_mode = epoc::gdi_draw_mode_pen;
 
         clipping_rect.make_empty();
         clipping_region.make_empty();
@@ -894,6 +950,17 @@ namespace eka2l1::epoc {
         }
 
         text_font = font_object;
+        {
+            static const bool uf_trace = (std::getenv("EKA2L1_WS_GC_TRACE") != nullptr);
+            if (uf_trace) {
+                std::fprintf(stderr, "UFT win=%08x handle=%u face='%s' idx=%u design=%d ascent=%d descent=%d metric=0x%x\n",
+                    attached_window ? attached_window->id : 0, font_handle,
+                    common::ucs2_to_utf8(font_object->of_info.face_attrib.name.to_std_string(nullptr)).c_str(),
+                    static_cast<unsigned>(font_object->of_info.idx), font_object->of_info.metrics.design_height,
+                    font_object->of_info.metrics.ascent, font_object->of_info.metrics.descent,
+                    font_object->of_info.metric_identifier);
+            }
+        }
         context.complete(epoc::error_none);
     }
 
@@ -914,8 +981,29 @@ namespace eka2l1::epoc {
     }
     
     void graphic_context::set_draw_mode(service::ipc_context &context, ws_cmd &cmd) {
-        // Not easy to implement under hardware acceleration, ignore for now
+        // CGraphicsContext::TDrawMode. It applies to the pen and brush draws (rect fills and outlines,
+        // lines, plots, Clear), which the gstore replays with blending (gdi_expand_draw_mode).
+        draw_mode = *reinterpret_cast<std::uint32_t *>(cmd.data_ptr);
         context.complete(epoc::error_none);
+    }
+
+    void graphic_context::add_moded_draw_command(epoc::gdi_store_command &cmd) {
+        if ((draw_mode == epoc::gdi_draw_mode_pen) || !epoc::gdi_store_command_draws_pixels(cmd.opcode_)) {
+            attached_window->add_draw_command(cmd);
+            return;
+        }
+
+        // Bracket the draw so every stored segment still starts and ends in PEN mode: segments are
+        // replayed, aged out and rebuilt independently of each other.
+        epoc::gdi_store_command mode_cmd;
+        mode_cmd.opcode_ = epoc::gdi_store_command_set_draw_mode;
+        mode_cmd.get_data_struct<epoc::gdi_store_command_set_draw_mode_data>().mode_ = draw_mode;
+        attached_window->add_draw_command(mode_cmd);
+
+        attached_window->add_draw_command(cmd);
+
+        mode_cmd.get_data_struct<epoc::gdi_store_command_set_draw_mode_data>().mode_ = epoc::gdi_draw_mode_pen;
+        attached_window->add_draw_command(mode_cmd);
     }
 
     void graphic_context::draw_text(service::ipc_context &context, ws_cmd &cmd) {
@@ -1235,6 +1323,26 @@ namespace eka2l1::epoc {
 
         if (need_to_set_flushed) {
             flushed = false;
+        }
+
+        {
+            // Diagnostic: EKA2L1_WS_GC_TRACE=1 logs every GC command with its raw payload to stderr
+            // (opcode numbers are the client's table: u139 for Series 80).
+            static const bool gc_trace = (std::getenv("EKA2L1_WS_GC_TRACE") != nullptr);
+            if (gc_trace) {
+                std::string hex;
+                const std::uint8_t *b = reinterpret_cast<const std::uint8_t *>(cmd.data_ptr);
+                const int n = std::min<int>(cmd.header.cmd_len, 40);
+                char tmp[4];
+                for (int i = 0; i < n && b; i++) {
+                    std::snprintf(tmp, sizeof(tmp), "%02x", b[i]);
+                    hex += tmp;
+                    if ((i & 3) == 3) hex += ' ';
+                }
+                std::fprintf(stderr, "GCT win=%08x dm=%d gc=%p op=%u len=%u %s\n",
+                    attached_window ? attached_window->id : 0, attached_window ? static_cast<int>(attached_window->display_mode()) : -1, static_cast<void *>(this),
+                    cmd.header.op, cmd.header.cmd_len, hex.c_str());
+            }
         }
 
         handler(this, ctx, cmd);
