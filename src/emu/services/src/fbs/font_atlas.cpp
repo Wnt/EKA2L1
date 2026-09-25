@@ -24,6 +24,7 @@
 #include <common/algorithm.h>
 #include <common/time.h>
 
+#include <cmath>
 #include <cstring>
 
 namespace eka2l1::epoc {
@@ -137,8 +138,32 @@ namespace eka2l1::epoc {
             atlas_data_.get(), { pack_state_->width_, pack_state_->width_ }, positions.data(), infos);
     }
 
+    void font_atlas::set_client_advance(const std::uint32_t codepoint, const int advance) {
+        const std::lock_guard<std::mutex> guard(*client_advances_lock_);
+        client_advances_[codepoint] = advance;
+    }
+
+    bool font_atlas::get_client_advance(const std::uint32_t codepoint, int &advance) const {
+        const std::lock_guard<std::mutex> guard(*client_advances_lock_);
+        auto it = client_advances_.find(codepoint);
+        if (it == client_advances_.end()) {
+            return false;
+        }
+
+        advance = it->second;
+        return true;
+    }
+
+    int font_atlas::pen_advance(const float atlas_xadv, const float scale_x, const int *client_adv, const float client_scale) {
+        if (client_adv && (client_scale > 0.0f)) {
+            return static_cast<int>(std::round(static_cast<float>(*client_adv) * client_scale));
+        }
+
+        return static_cast<int>(std::round(atlas_xadv * scale_x));
+    }
+
     bool font_atlas::draw_text(const std::u16string &text, const eka2l1::rect &text_box, const epoc::text_alignment alignment, drivers::graphics_driver *driver, drivers::graphics_command_builder &builder, const eka2l1::vec2f scale_vector, bool source_over_alpha,
-        eka2l1::vec2 *pen_span) {
+        eka2l1::vec2 *pen_span, const float client_advance_scale) {
         // Clamp the atlas to what the GPU can actually allocate. Large fonts
         // (e.g. high display-scale rendering) would otherwise request an atlas
         // bigger than GL_MAX_TEXTURE_SIZE; the create then fails and the
@@ -247,13 +272,19 @@ namespace eka2l1::epoc {
 
         eka2l1::vec2 cur_pos = text_box.top;
 
+        auto step_of = [&](const char16_t chr) {
+            int client_adv = 0;
+            const bool known = (client_advance_scale > 0.0f) && get_client_advance(chr, client_adv);
+            return pen_advance(characters_[chr].xadv, scale_vector[0], known ? &client_adv : nullptr, client_advance_scale);
+        };
+
         // Calculate size of the text to know where to put them
         // If other alignment then left is on
         if (alignment != epoc::text_alignment::left) {
             float size_length = 0;
 
             for (auto &chr : text) {
-                size_length += static_cast<int>(characters_[chr].xadv * scale_vector[0]);
+                size_length += static_cast<float>(step_of(chr));
             }
 
             if (alignment == epoc::text_alignment::right) {
@@ -299,7 +330,7 @@ namespace eka2l1::epoc {
             }
 
             // TODO: Newline
-            cur_pos.x += static_cast<int>(std::round(info.xadv * scale_vector[0]));
+            cur_pos.x += step_of(chr);
         }
 
         if (pen_span) {
