@@ -1,3 +1,4 @@
+#include <services/window/rom_bridge.h>
 /*
  * Copyright (c) 2021 EKA2L1 Team.
  * 
@@ -1289,6 +1290,15 @@ void main_window::on_app_exited(const int exit_type, const int exit_reason, cons
             return;
         }
 
+        {
+            auto *kern = emulator_state_.symsys->get_kernel_system();
+            const std::lock_guard<eka2l1::kernel_system> guard(*kern);
+            auto *bridge = eka2l1::get_rom_window_bridge(kern);
+            if (bridge && !bridge->snapshot.ready) {
+                LOG_ERROR(eka2l1::FRONTEND_UI, "ROM home recovery needs the current SysState.exe window bridge");
+                return;
+            }
+        }
         const std::string &home = emulator_state_.kiosk.home_app;
         if (!home.empty()) {
             std::string err;
