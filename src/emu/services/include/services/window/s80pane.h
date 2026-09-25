@@ -94,8 +94,11 @@ namespace eka2l1::epoc {
 
         fbsfont *clock_font_ = nullptr;
         std::int64_t shown_minute_ = -1;
+        bool shown_twelve_hour_ = false;
 
         fbsfont *clock_font();
+        fbsfont *am_pm_font();
+        bool twelve_hour_clock() const;
         std::int64_t local_seconds() const;
         void draw_clock(drivers::graphics_command_builder &builder, screen *scr, const common::region &visible);
 
