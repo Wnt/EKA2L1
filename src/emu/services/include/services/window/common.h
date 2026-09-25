@@ -693,8 +693,17 @@ namespace eka2l1::epoc {
      * \brief Convert a pixel count to twips for a value the client may hand back in twips.
      *
      * With a whole twips-per-pixel ratio this is the plain product. With a fractional one (Series 80) it
-     * is the smallest whole twips count that get_nearest_font's truncating twips-to-pixels conversion
+     * is the smallest whole twips count that get_nearest_font's twips-to-pixels conversion (twips_to_pixels)
      * turns back into the same pixel count, so a font spec read in twips and asked for again keeps its size.
      */
     std::int32_t pixels_to_twips(const epocver ver, const std::int32_t pixels);
+
+    /**
+     * \brief Convert a font height in twips to pixels the way the font store does.
+     *
+     * Series 80 (epoc7) rounds to the nearest pixel, as FNTSTORE's VerticalTwipsToPixels does with the
+     * 9780 per-mille ratio; other platforms keep the historical truncating division by the approximate ratio.
+     * pixels_to_twips() values always convert back to the same pixel count.
+     */
+    std::int32_t twips_to_pixels(const epocver ver, const std::int32_t twips);
 }

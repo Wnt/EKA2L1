@@ -61,6 +61,10 @@ namespace eka2l1::epoc {
         std::vector<epoc::adapter::font_file_adapter_instance> font_adapters;
         std::vector<epoc::typeface_support> typefaces;
 
+        // Parallel to typefaces: the distinct heights (pixels, ascending) of a bitmap typeface's font bitmaps.
+        // Empty for an Open Font typeface.
+        std::vector<std::vector<std::int32_t>> typeface_bitmap_heights;
+
         eka2l1::io_system *io;
 
         // Linked typefaces occupy the front of open_font_store; see
@@ -112,6 +116,30 @@ namespace eka2l1::epoc {
         open_font_info *seek_the_open_font(epoc::font_spec_base &spec);
         open_font_info *seek_the_font_by_uid(const epoc::uid the_uid, epoc::open_font_metrics &target_metric, std::uint32_t *metric_identifier = nullptr);
         epoc::typeface_support *get_typeface_support(const std::uint32_t index);
+
+        /**
+         * @brief The heights (pixels, ascending) of the bitmap typeface at a TypefaceSupport index.
+         * @returns Null for an Open Font typeface or an index out of range.
+         */
+        const std::vector<std::int32_t> *get_typeface_bitmap_heights(const std::uint32_t index);
+
+        /**
+         * @brief Map a TypefaceSupport index (bitmap typefaces first, then Open Font ones by name) to the
+         *        position in the typefaces list. Returns typefaces.size() when out of range.
+         */
+        std::size_t typeface_list_position(const std::uint32_t index);
+
+        /**
+         * @brief FNTSTORE's standard Open Font sizes in twips (gOpenFontSizeInTwipsArray): 4-18 pt by 1,
+         *        20-36 pt by 2, 40-72 pt by 4, 80-144 pt by 8.
+         */
+        static const std::vector<std::int32_t> &open_font_standard_sizes_in_twips();
+
+        /**
+         * @brief Index of the first standard size at or above a minimum height (CTypefaceSupportInfo's
+         *        iNearestPointSizeIndex); the array size when the minimum is above them all.
+         */
+        static std::size_t open_font_nearest_size_index(const std::int32_t min_height_in_twips);
 
         const std::size_t number_of_fonts() const {
             return open_font_store.size();

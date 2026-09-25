@@ -21,7 +21,10 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
+#include <cstdio>
 #include <cstdlib>
+#include <common/cvt.h>
 #include <services/fbs/fbs.h>
 #include <services/fbs/linked_font_config.h>
 
@@ -455,6 +458,27 @@ namespace eka2l1 {
         support->min_height_in_twips_ = epoc::pixels_to_twips(ver_sym, support->min_height_in_twips_);
         support->max_height_in_twips_ = epoc::pixels_to_twips(ver_sym, support->max_height_in_twips_);
 
+        if (support->is_scalable_) {
+            // CTypefaceSupportInfo::SetTypefaceInfo: the heights of an Open Font typeface are the standard sizes
+            // from the first one at or above its minimum. Reporting a single height made Series 80 Sheet, which
+            // walks the heights for the one nearest its 10 pt default, settle on 4 pt: 8-pixel cell text.
+            const std::vector<std::int32_t> &sizes = epoc::font_store::open_font_standard_sizes_in_twips();
+            const std::size_t nearest = epoc::font_store::open_font_nearest_size_index(support->min_height_in_twips_);
+
+            support->num_heights_ = static_cast<std::uint32_t>(std::max<std::int64_t>(1, static_cast<std::int64_t>(sizes.size()) - static_cast<std::int64_t>(nearest)));
+            support->max_height_in_twips_ = std::max<std::int32_t>(sizes.back(), support->min_height_in_twips_);
+        }
+
+        {
+            static const bool tf_trace = (std::getenv("EKA2L1_WS_GC_TRACE") != nullptr);
+            if (tf_trace) {
+                std::fprintf(stderr, "TFS thr=%s idx=%u name='%s' flags=0x%x heights=%u min_tw=%d max_tw=%d scalable=%d\n",
+                    ctx->msg->own_thr->name().c_str(), font_idx.value(), common::ucs2_to_utf8(support->info_.name.to_std_string(nullptr)).c_str(),
+                    support->info_.flags, support->num_heights_, support->min_height_in_twips_,
+                    support->max_height_in_twips_, support->is_scalable_);
+            }
+        }
+
         ctx->write_data_to_descriptor_argument(1, support.value());
         ctx->complete(epoc::error_none);
     }
@@ -642,11 +666,11 @@ namespace eka2l1 {
                 || (ctx->msg->function == fbs_nearest_font_max_height_in_pixels));
 
         if ((serv->kern->is_eka1() && !pixel_height_from_client) || is_twips) {
-            spec.height = static_cast<std::int32_t>(static_cast<float>(spec.height) / epoc::get_approximate_pixel_to_twips_mul(serv->kern->get_epoc_version()));
+            spec.height = epoc::twips_to_pixels(serv->kern->get_epoc_version(), spec.height);
             // Design-height requests, including the EKA1 form, do not carry
             // the max-height/device-size descriptor in slot 2.
             if (size_info) {
-                size_info->x = static_cast<std::int32_t>(static_cast<float>(size_info->x) / epoc::get_approximate_pixel_to_twips_mul(serv->kern->get_epoc_version()));
+                size_info->x = epoc::twips_to_pixels(serv->kern->get_epoc_version(), size_info->x);
             }
         }
 
@@ -736,6 +760,17 @@ namespace eka2l1 {
                 ctx->msg->function, ctx->msg->own_thr->name(), common::ucs2_to_utf8(spec.tf.name.to_std_string(nullptr)), spec.height,
                 spec_arg->height, spec.style.flags, font->id, common::ucs2_to_utf8(font->of_info.face_attrib.name.to_std_string(nullptr)),
                 font->of_info.metrics.design_height, font->of_info.adapter->vectorizable());
+        }
+        {
+            static const bool fnt_trace = (std::getenv("EKA2L1_WS_GC_TRACE") != nullptr);
+            if (fnt_trace) {
+                std::fprintf(stderr, "FNT thr=%s fn=0x%x req_name='%s' req_h=%d (spec_arg h=%d) flags=0x%x size_x=%d design=%d -> id=%u face='%s' design_h=%d ascent=%d descent=%d metric=0x%x\n",
+                    ctx->msg->own_thr->name().c_str(), ctx->msg->function, common::ucs2_to_utf8(spec.tf.name.to_std_string(nullptr)).c_str(), spec.height, spec_arg->height,
+                    spec.style.flags, size_info ? size_info->x : -1, is_design_height ? 1 : 0, font->id,
+                    common::ucs2_to_utf8(font->of_info.face_attrib.name.to_std_string(nullptr)).c_str(),
+                    font->of_info.metrics.design_height, font->of_info.metrics.ascent, font->of_info.metrics.descent,
+                    font->of_info.metric_identifier);
+            }
         }
 
         write_font_handle(ctx, font, 1);
@@ -1227,8 +1262,21 @@ namespace eka2l1 {
     }
 
     void fbs_server::load_fonts_from_directory(eka2l1::io_system *io, eka2l1::directory *folder) {
+        // The font store keeps typefaces in load order, and clients see that order through TypefaceSupport.
+        // A ROM directory lists its files sorted by name; the host directory we read a dumped Z: from lists
+        // them in whatever order the filesystem hashes them, which differed between two copies of the same
+        // data directory. Load in name order, as the device does.
+        std::vector<std::string> paths;
         while (auto entry = folder->get_next_entry()) {
-            add_single_font(io, common::utf8_to_ucs2(entry->full_path));
+            paths.push_back(entry->full_path);
+        }
+
+        std::sort(paths.begin(), paths.end(), [](const std::string &a, const std::string &b) {
+            return common::compare_ignore_case(common::utf8_to_ucs2(a), common::utf8_to_ucs2(b)) < 0;
+        });
+
+        for (const auto &path : paths) {
+            add_single_font(io, common::utf8_to_ucs2(path));
         }
     }
 

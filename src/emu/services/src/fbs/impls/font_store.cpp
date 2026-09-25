@@ -17,6 +17,8 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
+#include <vector>
 #include <services/fbs/adapter/linked_font_adapter.h>
 #include <services/fbs/font_store.h>
 
@@ -45,7 +47,6 @@ namespace eka2l1::epoc {
 
         for (std::size_t i = 0; i < adapter->count(); i++) {
             epoc::open_font_face_attrib attrib;
-            epoc::open_font_metrics metrics;
 
             if (!adapter->get_face_attrib(i, attrib)) {
                 continue;
@@ -78,17 +79,35 @@ namespace eka2l1::epoc {
                 open_font_store.push_back(std::move(info));
             }
 
+            // What CFontStore::TypefaceSupport reports. A bitmap (GDR) typeface carries its own TTypeface flags
+            // and one height per font bitmap; the store answers with the smallest and largest of them and how
+            // many distinct heights there are. An Open Font typeface takes its flags from the face attributes.
+            // The entry used to be half uninitialised: the flags ORed into stack garbage and the maximum
+            // height came from a metrics struct nothing filled, so a client choosing a typeface by its
+            // attributes chose a different one on every run (Series 80 Sheet drew its cells in Digi24,
+            // Terminal or Nokia12 by chance).
+            std::uint32_t bitmap_flags = 0;
+            std::vector<std::int32_t> bitmap_heights;
+            const bool is_bitmap = !adapter->vectorizable() && adapter->get_bitmap_typeface_support(i, bitmap_flags, bitmap_heights);
+
             bool found_typeface = false;
 
-            for (std::size_t i = 0; i < typefaces.size(); i++) {
-                if (common::compare_ignore_case(typefaces[i].info_.name.to_std_string(nullptr), fam_name) == 0) {
+            for (std::size_t j = 0; j < typefaces.size(); j++) {
+                if (common::compare_ignore_case(typefaces[j].info_.name.to_std_string(nullptr), fam_name) == 0) {
                     // NOTE: Stored in here is actually pixels, they will just scale to twips later when retrieved through API
-                    typefaces[i].is_scalable_ = adapter->vectorizable();
-                    typefaces[i].num_heights_++;
-                    typefaces[i].max_height_in_twips_ = common::max<std::int32_t>(typefaces[i].max_height_in_twips_, metrics.max_height); 
-                    typefaces[i].min_height_in_twips_ = common::min<std::int32_t>(typefaces[i].min_height_in_twips_, attrib.min_size_in_pixels);
+                    if (is_bitmap) {
+                        std::vector<std::int32_t> &heights = typeface_bitmap_heights[j];
+                        heights.insert(heights.end(), bitmap_heights.begin(), bitmap_heights.end());
+                        std::sort(heights.begin(), heights.end());
+                        heights.erase(std::unique(heights.begin(), heights.end()), heights.end());
 
-                    fill_typeface_flags(attrib, typefaces[i].info_);
+                        typefaces[j].num_heights_ = static_cast<std::uint32_t>(heights.size());
+                        typefaces[j].min_height_in_twips_ = heights.front();
+                        typefaces[j].max_height_in_twips_ = heights.back();
+                    } else {
+                        typefaces[j].min_height_in_twips_ = common::min<std::int32_t>(typefaces[j].min_height_in_twips_, attrib.min_size_in_pixels);
+                        fill_typeface_flags(attrib, typefaces[j].info_);
+                    }
 
                     found_typeface = true;
                     break;
@@ -96,17 +115,29 @@ namespace eka2l1::epoc {
             }
 
             if (!found_typeface) {
-                epoc::typeface_support support;
+                epoc::typeface_support support{};
                 support.info_.name.assign(nullptr, fam_name);
+                support.info_.flags = 0;
 
-                fill_typeface_flags(attrib, support.info_);
+                if (is_bitmap) {
+                    support.info_.flags = bitmap_flags & (epoc::typeface_info::tf_propotional | epoc::typeface_info::tf_serif | epoc::typeface_info::tf_symbol);
+                    support.num_heights_ = static_cast<std::uint32_t>(bitmap_heights.size());
+                    support.is_scalable_ = 0;
+                    support.min_height_in_twips_ = bitmap_heights.front();
+                    support.max_height_in_twips_ = bitmap_heights.back();
+                } else {
+                    fill_typeface_flags(attrib, support.info_);
 
-                support.num_heights_ = 1;
-                support.is_scalable_ = adapter->vectorizable();
-                support.max_height_in_twips_ = metrics.max_height;
-                support.min_height_in_twips_ = attrib.min_size_in_pixels;
+                    // The standard-size range an Open Font typeface reports (number of heights, largest height)
+                    // is worked out from the minimum when a client asks (fbscli::typeface_support).
+                    support.num_heights_ = 1;
+                    support.is_scalable_ = adapter->vectorizable();
+                    support.min_height_in_twips_ = std::max<std::int32_t>(1, attrib.min_size_in_pixels);
+                    support.max_height_in_twips_ = support.min_height_in_twips_;
+                }
 
                 typefaces.push_back(std::move(support));
+                typeface_bitmap_heights.push_back(is_bitmap ? bitmap_heights : std::vector<std::int32_t>{});
             }
         }
 
@@ -198,10 +229,12 @@ namespace eka2l1::epoc {
         // Present it to typeface enumeration the same way the canonical
         // component is, so a client listing typefaces can find it by name.
         epoc::typeface_support support{};
+        std::vector<std::int32_t> support_heights;
 
-        for (auto &typeface : typefaces) {
-            if (common::compare_ignore_case(typeface.info_.name.to_std_string(nullptr), canonical_family) == 0) {
-                support = typeface;
+        for (std::size_t j = 0; j < typefaces.size(); j++) {
+            if (common::compare_ignore_case(typefaces[j].info_.name.to_std_string(nullptr), canonical_family) == 0) {
+                support = typefaces[j];
+                support_heights = typeface_bitmap_heights[j];
                 break;
             }
         }
@@ -211,6 +244,7 @@ namespace eka2l1::epoc {
         fill_typeface_flags(attrib, support.info_);
 
         typefaces.push_back(std::move(support));
+        typeface_bitmap_heights.push_back(std::move(support_heights));
         font_adapters.push_back(std::move(adapter));
 
         return true;
@@ -424,10 +458,83 @@ namespace eka2l1::epoc {
         return best;
     }
 
+    const std::vector<std::int32_t> &font_store::open_font_standard_sizes_in_twips() {
+        static const std::vector<std::int32_t> sizes = []() {
+            std::vector<std::int32_t> result;
+            for (std::int32_t pt = 4; pt <= 18; pt++) {
+                result.push_back(pt * 20);
+            }
+            for (std::int32_t pt = 20; pt <= 36; pt += 2) {
+                result.push_back(pt * 20);
+            }
+            for (std::int32_t pt = 40; pt <= 72; pt += 4) {
+                result.push_back(pt * 20);
+            }
+            for (std::int32_t pt = 80; pt <= 144; pt += 8) {
+                result.push_back(pt * 20);
+            }
+            return result;
+        }();
+
+        return sizes;
+    }
+
+    std::size_t font_store::open_font_nearest_size_index(const std::int32_t min_height_in_twips) {
+        const std::vector<std::int32_t> &sizes = open_font_standard_sizes_in_twips();
+        std::size_t index = 0;
+
+        for (; index < sizes.size(); index++) {
+            if (min_height_in_twips <= sizes[index]) {
+                break;
+            }
+        }
+
+        return index;
+    }
+
+    std::size_t font_store::typeface_list_position(const std::uint32_t index) {
+        if (index >= typefaces.size()) {
+            return typefaces.size();
+        }
+
+        // CFontStore::TypefaceSupport lists the bitmap typefaces first, in the order they were loaded, and the
+        // Open Font typefaces after them, sorted by name (CTypefaceSupportInfo::CompareFontNames).
+        std::vector<std::size_t> order;
+        order.reserve(typefaces.size());
+
+        for (std::size_t i = 0; i < typefaces.size(); i++) {
+            if (!typefaces[i].is_scalable_) {
+                order.push_back(i);
+            }
+        }
+
+        const std::size_t bitmap_count = order.size();
+
+        for (std::size_t i = 0; i < typefaces.size(); i++) {
+            if (typefaces[i].is_scalable_) {
+                order.push_back(i);
+            }
+        }
+
+        std::stable_sort(order.begin() + bitmap_count, order.end(), [this](const std::size_t a, const std::size_t b) {
+            return common::compare_ignore_case(typefaces[a].info_.name.to_std_string(nullptr),
+                       typefaces[b].info_.name.to_std_string(nullptr))
+                < 0;
+        });
+
+        return order[index];
+    }
+
     epoc::typeface_support *font_store::get_typeface_support(const std::uint32_t index) {
-        if (index >= open_font_store.size()) {
+        const std::size_t pos = typeface_list_position(index);
+        return (pos < typefaces.size()) ? &typefaces[pos] : nullptr;
+    }
+
+    const std::vector<std::int32_t> *font_store::get_typeface_bitmap_heights(const std::uint32_t index) {
+        const std::size_t pos = typeface_list_position(index);
+        if ((pos >= typefaces.size()) || typefaces[pos].is_scalable_ || typeface_bitmap_heights[pos].empty()) {
             return nullptr;
         }
-        return &typefaces[index];
+        return &typeface_bitmap_heights[pos];
     }
 }

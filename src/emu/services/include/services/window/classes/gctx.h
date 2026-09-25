@@ -98,6 +98,10 @@ namespace eka2l1::epoc {
         // Stores a pen/brush draw, bracketed by draw-mode state commands when the mode is not PEN.
         void add_moded_draw_command(epoc::gdi_store_command &cmd);
 
+        // BitBltMasked with a brush: fills the blitted rectangle with the brush before the masked draw.
+        void fill_masked_blit_background(const eka2l1::vec2 &dest_top, const eka2l1::rect &source_rect,
+            epoc::bitwise_bitmap *source, epoc::bitwise_bitmap *mask);
+
         void submit_queue_commands(kernel::thread *rq);
         void on_command_batch_done(service::ipc_context &ctx) override;
 
