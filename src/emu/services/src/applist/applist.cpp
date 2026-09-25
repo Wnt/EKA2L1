@@ -796,8 +796,8 @@ namespace eka2l1 {
             return;
         }
 
-        LOG_TRACE(SERVICE_APPLIST, "{}Document: app 0x{:X}, document {}", create ? "Create" : "Start", app_uid.value(),
-            common::ucs2_to_utf8(doc_name.value()));
+        LOG_TRACE(SERVICE_APPLIST, "{}Document: app 0x{:X}, command line {}", create ? "Create" : "Start", app_uid.value(),
+            common::ucs2_to_utf8(parameter.to_string(true)));
 
         ctx.write_data_to_descriptor_argument<kernel::uid_eka1>(2, static_cast<kernel::uid_eka1>(thread_id));
         ctx.complete(epoc::error_none);
@@ -1771,7 +1771,12 @@ namespace eka2l1 {
             native_executable_path = mandatory_info.app_path.to_std_string(nullptr);
         }
 
-        args.document_name_ = eka2l1::replace_extension(eka2l1::filename(app_path), u"");
+        // A launch without a document gets the application's name as its document (the old-arch
+        // command line always names one); a caller that names a document (Start/CreateDocument) keeps it.
+        if (args.document_name_.empty()) {
+            args.document_name_ = eka2l1::replace_extension(eka2l1::filename(app_path), u"");
+        }
+
         args.executable_path_ = app_path;
         args.default_screen_number_ = default_screen_number;
     }
