@@ -664,7 +664,7 @@ namespace eka2l1 {
 
         for (auto &font_obj : server<fbs_server>()->font_obj_container) {
             fbsfont *the_font = reinterpret_cast<fbsfont *>(font_obj.get());
-            const std::int32_t delta = common::abs(is_design_height ? (spec.height - the_font->of_info.metrics.design_height) : (size_info->x - the_font->of_info.metrics.max_height));
+            const std::int32_t delta = common::abs(is_design_height ? (spec.height - the_font->of_info.metrics.design_height) : (size_info->x - epoc::font_height_in_pixels(the_font->of_info.metrics, the_font->of_info.adapter->vectorizable())));
 
             // Same adapter and font size is not to much of a difference. A bitmap typeface holds several
             // bitmaps of one height (bold, regular), so reuse only the very bitmap this request resolves to.
@@ -774,7 +774,7 @@ namespace eka2l1 {
         }
 
         const std::int32_t twips_height = epoc::pixels_to_twips(serv->kern->get_epoc_version(),
-            font->of_info.metrics.max_height);
+            epoc::font_height_in_pixels(font->of_info.metrics, font->of_info.adapter->vectorizable()));
 
         ctx->write_data_to_descriptor_argument<std::int32_t>(1, twips_height);
         ctx->complete(epoc::error_none);

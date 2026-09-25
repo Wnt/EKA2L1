@@ -20,7 +20,6 @@
 #pragma once
 
 #include <services/fbs/adapter/font_adapter.h>
-#include <stb_rect_pack.h>
 
 #include <common/buffer.h>
 #include <common/container.h>
@@ -29,6 +28,14 @@
 #include <vector>
 
 namespace eka2l1::epoc::adapter {
+    /**
+     * \brief The TOpenFontMetrics a GDR font bitmap is presented with.
+     *
+     * The cell height is the design height; the ascent and the rest of the cell are the extents above
+     * and below the baseline (ascent/descent, and again max height/max depth).
+     */
+    open_font_metrics make_gdr_font_metrics(const loader::gdr::font_bitmap_header &header);
+
     class gdr_font_file_adapter : public font_file_adapter_base {
         loader::gdr::file_store store_;
         std::unique_ptr<common::ro_stream> buf_stream_;

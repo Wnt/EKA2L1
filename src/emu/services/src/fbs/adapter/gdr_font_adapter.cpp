@@ -25,22 +25,24 @@
 #include <limits>
 
 namespace eka2l1::epoc::adapter {
-    static open_font_metrics build_of_metrics_from_font_bitmap(const loader::gdr::font_bitmap *target_bitmap) {
-        open_font_metrics metrics;
+    open_font_metrics make_gdr_font_metrics(const loader::gdr::font_bitmap_header &header) {
+        open_font_metrics metrics{};
+        const std::int16_t cell_height = header.cell_height_in_pixels_;
 
-        metrics.max_height = 0;
-        metrics.max_width = 0;
-        metrics.ascent = 0;
+        metrics.max_width = header.max_char_width_in_pixels_;
+        metrics.ascent = header.ascent_in_pixels_;
+        metrics.descent = cell_height - metrics.ascent;
 
-        metrics.max_width = target_bitmap->header_.max_char_width_in_pixels_;
-        metrics.max_height = target_bitmap->header_.cell_height_in_pixels_;
-        metrics.ascent = target_bitmap->header_.ascent_in_pixels_;
+        // The cell is the font's height (CFont::HeightInPixels of a CFontBitmap). TOpenFontMetrics splits it at
+        // the baseline: iMaxHeight is the extent above it, iMaxDepth the extent below. Reporting the whole cell
+        // as iMaxHeight made Series 80 Desk lay its icon labels out one descent too tall: the highlight box grew
+        // by 4 px and the label's baseline sank by 8 px against the device and the SDK emulator.
+        metrics.design_height = cell_height;
+        metrics.max_height = metrics.ascent;
+        metrics.max_depth = metrics.descent;
 
         // No baseline correction
         metrics.baseline_correction = 0; // For the whole font
-        metrics.descent = -(metrics.ascent - metrics.max_height); // Correct?
-        metrics.design_height = metrics.max_height; // Dunno, maybe wrong ;(
-        metrics.max_depth = 0; // Help I dunno what this is
 
         return metrics;
     }
@@ -80,7 +82,7 @@ namespace eka2l1::epoc::adapter {
                     *metric_identifier = static_cast<std::uint32_t>(i);
                 }
 
-                return build_of_metrics_from_font_bitmap(store_.typefaces_[face_index].font_bitmaps_[i]);
+                return make_gdr_font_metrics(store_.typefaces_[face_index].font_bitmaps_[i]->header_);
             }
         }
 
@@ -364,6 +366,6 @@ namespace eka2l1::epoc::adapter {
             *metric_identifier = static_cast<std::uint32_t>(final_index);
         }
 
-        return build_of_metrics_from_font_bitmap(target_bitmap);
+        return make_gdr_font_metrics(target_bitmap->header_);
     }
 }

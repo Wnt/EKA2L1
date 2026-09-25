@@ -326,8 +326,9 @@ namespace eka2l1::epoc::adapter {
         // is itself unusable -- S60v2 clients have been seen asking for two
         // pixels while the canonical renders at thirteen -- passing it on
         // shrinks every fallback glyph to nothing.
-        const std::uint16_t settled_size = (metrics->max_height > 0)
-            ? static_cast<std::uint16_t>(metrics->max_height)
+        const std::int16_t settled_height = font_height_in_pixels(*metrics, canonical().adapter_->vectorizable());
+        const std::uint16_t settled_size = (settled_height > 0)
+            ? static_cast<std::uint16_t>(settled_height)
             : targeted_font_size;
 
         std::vector<std::uint32_t> &identifiers = metric_identifiers_[canonical_identifier];

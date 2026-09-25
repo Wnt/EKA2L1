@@ -335,7 +335,7 @@ namespace eka2l1::epoc {
         builder_.set_brush_color_detail(cmd.color_);
         fbsfont *text_font = reinterpret_cast<fbsfont*>(cmd.fbs_font_ptr_);
         
-        std::int16_t scaled_font_size = text_font->of_info.metrics.max_height;
+        std::int16_t scaled_font_size = epoc::font_height_in_pixels(text_font->of_info.metrics, text_font->of_info.adapter->vectorizable());
         std::uint32_t metric_identifier = text_font->of_info.metric_identifier;
         float scale_to_pass = 1.0f;
 
@@ -369,7 +369,7 @@ namespace eka2l1::epoc {
             // underline starts 1 + thickness / 2 below the baseline (APIExGetUnderlineMetrics), the
             // strikethrough AscentInPixels * 5 / 12 + 1 above it (GetStrikethroughMetrics). The text box's
             // top is the baseline here.
-            const int thickness = std::max<int>(text_font->of_info.metrics.max_height / 10, 1);
+            const int thickness = std::max<int>(epoc::font_height_in_pixels(text_font->of_info.metrics, text_font->of_info.adapter->vectorizable()) / 10, 1);
             const int baseline = scaled_text_box.top.y;
 
             builder_.set_brush_color_detail(cmd.color_);

@@ -67,6 +67,17 @@ namespace eka2l1::epoc {
 
     static_assert(sizeof(open_font_metrics) == 16);
 
+    /**
+     * \brief The font's line height in pixels, what CFont::HeightInPixels reports.
+     *
+     * TOpenFontMetrics::iMaxHeight is only the extent above the baseline (iMaxDepth the extent below it).
+     * A bitmap font's height is its cell, kept as the design height; the scalable adapters report their
+     * whole line height in max_height.
+     */
+    inline std::int16_t font_height_in_pixels(const open_font_metrics &metrics, const bool vectorizable) {
+        return vectorizable ? metrics.max_height : metrics.design_height;
+    }
+
     struct open_font_shaping_parameter {
         std::uint32_t text_range_[2];
         std::uint32_t script_code_;
