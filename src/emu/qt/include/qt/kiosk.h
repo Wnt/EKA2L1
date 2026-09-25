@@ -110,6 +110,7 @@ namespace eka2l1::desktop {
     std::vector<running_app> list_running_apps(emulator &state, const bool include_plain_groups);
 
     enum class switch_result {
+        queued,     ///< ROM helper will execute the ordinal change; query focus for completion.
         failed,
         switched,   ///< The app's window group went to ordinal position 0.
         launched    ///< The app was not running and has been started.
@@ -147,6 +148,7 @@ namespace eka2l1::desktop {
      *   launch <uid|caption> [doc] OK launched uid=0x... name="..."                     always a new instance;
      *                              a document (a file, or a URL for Web) opens with EApaCommandOpen
      *   switch <uid|caption>       OK switched uid=... name="..." wg=N ordinal=N focus=0|1
+     *                              | OK queued uid=... wg=N (ROM helper; query focus)
      *                              | OK launched ...                                    front, or start it
      *   key <name> [down|up]       OK queued key   named physical key, or a tap without an edge
      *   type <UTF-8 text>          OK queued N     ordered characters, one per 30 ms; preserves spaces
