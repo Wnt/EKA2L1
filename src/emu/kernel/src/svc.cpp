@@ -5726,6 +5726,108 @@ namespace eka2l1::epoc {
         std::memcpy(loc, &(loc_pkg.value()), sizeof(epoc::locale));
     }
 
+    // EKA1 keeps the language tables in the kernel (from the locale DLL) and hands them out through these
+    // executive calls; euser's TDayName::Set, TMonthName::Set, TDateSuffix::Set, TAmPmName::Set and
+    // TCurrencySymbol::Set are one-instruction wrappers around them (Symbian OS 7.0s: SWI 0x800061..0x800067,
+    // decoded from the Nokia 9300 euser.dll). Unanswered, every date and time an app formats comes out with
+    // empty names. The emulated devices run English (devices.cpp adds it when the firmware names no
+    // language), so the English tables are served.
+    static const char16_t *EKA1_DAY_NAMES[] = { u"Monday", u"Tuesday", u"Wednesday", u"Thursday", u"Friday",
+        u"Saturday", u"Sunday" };
+    static const char16_t *EKA1_DAY_NAMES_ABB[] = { u"Mon", u"Tue", u"Wed", u"Thu", u"Fri", u"Sat", u"Sun" };
+    static const char16_t *EKA1_MONTH_NAMES[] = { u"January", u"February", u"March", u"April", u"May", u"June",
+        u"July", u"August", u"September", u"October", u"November", u"December" };
+    static const char16_t *EKA1_MONTH_NAMES_ABB[] = { u"Jan", u"Feb", u"Mar", u"Apr", u"May", u"Jun", u"Jul",
+        u"Aug", u"Sep", u"Oct", u"Nov", u"Dec" };
+
+    template <std::size_t N>
+    static void eka1_assign_locale_name(kernel_system *kern, const char16_t *(&table)[N], const std::int32_t index,
+        epoc::des16 *name) {
+        if (!name || (index < 0) || (index >= static_cast<std::int32_t>(N))) {
+            return;
+        }
+
+        name->assign(kern->crr_process(), std::u16string(table[index]));
+    }
+
+    BRIDGE_FUNC(void, day_name_eka1, const std::int32_t day, epoc::des16 *name) {
+        eka1_assign_locale_name(kern, EKA1_DAY_NAMES, day, name);
+    }
+
+    BRIDGE_FUNC(void, day_name_abb_eka1, const std::int32_t day, epoc::des16 *name) {
+        eka1_assign_locale_name(kern, EKA1_DAY_NAMES_ABB, day, name);
+    }
+
+    BRIDGE_FUNC(void, month_name_eka1, const std::int32_t month, epoc::des16 *name) {
+        eka1_assign_locale_name(kern, EKA1_MONTH_NAMES, month, name);
+    }
+
+    BRIDGE_FUNC(void, month_name_abb_eka1, const std::int32_t month, epoc::des16 *name) {
+        eka1_assign_locale_name(kern, EKA1_MONTH_NAMES_ABB, month, name);
+    }
+
+    // aDateSuffix is the day of the month minus one (0..30): 1st 2nd 3rd 4th .. 21st 22nd 23rd .. 31st.
+    BRIDGE_FUNC(void, date_suffix_eka1, const std::int32_t suffix, epoc::des16 *name) {
+        if (!name || (suffix < 0) || (suffix > 30)) {
+            return;
+        }
+
+        const std::int32_t day = suffix + 1;
+        const char16_t *text = u"th";
+
+        if ((day % 10 == 1) && (day != 11)) {
+            text = u"st";
+        } else if ((day % 10 == 2) && (day != 12)) {
+            text = u"nd";
+        } else if ((day % 10 == 3) && (day != 13)) {
+            text = u"rd";
+        }
+
+        name->assign(kern->crr_process(), std::u16string(text));
+    }
+
+    BRIDGE_FUNC(void, am_pm_name_eka1, const std::int32_t am_pm, epoc::des16 *name) {
+        if (!name || (am_pm < 0) || (am_pm > 1)) {
+            return;
+        }
+
+        name->assign(kern->crr_process(), std::u16string(am_pm ? u"pm" : u"am"));
+    }
+
+    BRIDGE_FUNC(void, currency_symbol_eka1, epoc::des16 *symbol) {
+        if (!symbol) {
+            return;
+        }
+
+        symbol->assign(kern->crr_process(), std::u16string(u"\u00A3"));
+    }
+
+    // TLocale::Set() const: the counterpart of locale_refresh.
+    BRIDGE_FUNC(void, locale_set_eka1, epoc::locale *loc) {
+        property_ptr prop = kern->get_prop(epoc::SYS_CATEGORY, epoc::LOCALE_DATA_KEY);
+        if (!prop || !loc) {
+            LOG_ERROR(KERNEL, "Locale property not available, TLocale::Set ignored");
+            return;
+        }
+
+        prop->set<epoc::locale>(*loc);
+    }
+
+    BRIDGE_FUNC(std::int32_t, semaphore_find_next, epoc::des16 *found_result, std::int32_t *next_con_handle, epoc::desc16 *match) {
+        return object_next_eka1(kern, found_result, next_con_handle, match, kernel::object_type::sema);
+    }
+
+    // RThread::SetProcessPriority(TProcessPriority) const: the priority of the process that owns the thread.
+    BRIDGE_FUNC(void, thread_set_process_priority_eka1, std::int32_t process_priority, kernel::handle thr_handle) {
+        thread_ptr thr = kern->get<kernel::thread>(thr_handle);
+
+        if (!thr || !thr->owning_process()) {
+            return;
+        }
+
+        thr->owning_process()->set_priority(static_cast<eka2l1::kernel::process_priority>(process_priority));
+    }
+
     BRIDGE_FUNC(std::int32_t, dll_global_data_allocated, const address handle) {
         return (kern->get_global_dll_space(handle, nullptr) != 0);
     }
@@ -6493,6 +6595,7 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0x80001C, process_find_next),
         BRIDGE_REGISTER(0x80001E, process_filename_eka1),
         BRIDGE_REGISTER(0x80001F, process_command_line_eka1),
+        BRIDGE_REGISTER(0x800028, semaphore_find_next),
         BRIDGE_REGISTER(0x80002C, semaphore_signal_n_eka1),
         BRIDGE_REGISTER(0x80002D, server_find_next),
         BRIDGE_REGISTER(0x800033, thread_find_next),
@@ -6513,6 +6616,13 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0x80005A, handle_name_eka1),
         BRIDGE_REGISTER(0x80005C, handle_info_eka1),
         BRIDGE_REGISTER(0x800060, user_language),
+        BRIDGE_REGISTER(0x800061, day_name_eka1),
+        BRIDGE_REGISTER(0x800062, day_name_abb_eka1),
+        BRIDGE_REGISTER(0x800063, month_name_eka1),
+        BRIDGE_REGISTER(0x800064, month_name_abb_eka1),
+        BRIDGE_REGISTER(0x800065, date_suffix_eka1),
+        BRIDGE_REGISTER(0x800066, am_pm_name_eka1),
+        BRIDGE_REGISTER(0x800067, currency_symbol_eka1),
         BRIDGE_REGISTER(0x800068, locale_refresh),
         BRIDGE_REGISTER(0x80006E, time_now),
         BRIDGE_REGISTER(0x80007C, user_svr_screen_info),
@@ -6552,12 +6662,14 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0xC00034, thread_resume),
         BRIDGE_REGISTER(0xC00035, thread_suspend),
         BRIDGE_REGISTER(0xC00037, thread_set_priority_eka1),
+        BRIDGE_REGISTER(0xC00039, thread_set_process_priority_eka1),
         BRIDGE_REGISTER(0xC0003B, thread_set_flags_eka1),
         BRIDGE_REGISTER(0xC00046, thread_request_complete_eka1),
         BRIDGE_REGISTER(0xC00047, timer_cancel),
         BRIDGE_REGISTER(0xC00048, timer_after_eka1),
         BRIDGE_REGISTER(0xC0004E, request_signal),
         BRIDGE_REGISTER(0xC0005E, after),
+        BRIDGE_REGISTER(0xC00069, locale_set_eka1),
         BRIDGE_REGISTER(0xC0006B, message_complete_eka1),
         BRIDGE_REGISTER(0xC0006D, heap_switch),
         BRIDGE_REGISTER(0xC00076, the_executor_eka1),

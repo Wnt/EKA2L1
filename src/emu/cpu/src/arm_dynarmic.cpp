@@ -343,10 +343,39 @@ namespace eka2l1::arm {
         return std::make_unique<Dynarmic::A32::Jit>(config);
     }
 
+    // The JIT's inline TLB probe compares only the page number stored in the entry with the page being
+    // accessed, and trusts host_base on a match. Dynarmic's empty entry is all zeroes, so it "matches" page 0:
+    // a guest NULL dereference (a load from 0x1B8, say) then reads through host_base == nullptr and kills the
+    // host with SIGSEGV instead of raising a guest access violation. An entry is only ever probed for pages
+    // whose low index bits equal its own index, so a tag with different index bits can never match.
+    static void make_tlb_entry_unmatchable(Dynarmic::TLB<9> &tlb, const std::size_t index, const bool read,
+        const bool write, const bool execute) {
+        constexpr std::size_t INDEX_MASK = (1 << 9) - 1;
+        const Dynarmic::VAddr never = static_cast<Dynarmic::VAddr>(((index ^ 1) & INDEX_MASK) << tlb.page_bits);
+        Dynarmic::TLBEntry &entry = tlb.entries[index];
+
+        if (read)
+            entry.read_addr = never;
+        if (write)
+            entry.write_addr = never;
+        if (execute)
+            entry.execute_addr = never;
+    }
+
+    static void make_tlb_unmatchable(Dynarmic::TLB<9> &tlb) {
+        for (std::size_t i = 0; i < tlb.entries.size(); i++) {
+            if (!tlb.entries[i].host_base) {
+                make_tlb_entry_unmatchable(tlb, i, true, true, true);
+            }
+        }
+    }
+
     dynarmic_core::dynarmic_core(arm::exclusive_monitor *monitor)
         : tlb_obj(12)
         , interpreter(monitor, 12)
         , interpreter_callback_inited(false) {
+        make_tlb_unmatchable(tlb_obj);
+
         std::shared_ptr<dynarmic_core_cp15> cp15 = std::make_shared<dynarmic_core_cp15>();
         cb = std::make_unique<dynarmic_core_callback>(*this, cp15);
 
@@ -487,14 +516,26 @@ namespace eka2l1::arm {
         }
 
         tlb_obj.Add(vaddr, ptr, prot_flags);
+
+        // Add() writes a zero tag for each permission the page lacks, which would match page 0.
+        const std::size_t index = (vaddr >> tlb_obj.page_bits) & (tlb_obj.entries.size() - 1);
+        make_tlb_entry_unmatchable(tlb_obj, index, (prot_flags & Dynarmic::MemoryPermission::Read) != Dynarmic::MemoryPermission::Read,
+            (prot_flags & Dynarmic::MemoryPermission::Write) != Dynarmic::MemoryPermission::Write,
+            (prot_flags & Dynarmic::MemoryPermission::Execute) != Dynarmic::MemoryPermission::Execute);
     }
 
     void dynarmic_core::dirty_tlb_page(address addr) {
         tlb_obj.MakeDirty(addr);
+
+        const std::size_t index = (addr >> tlb_obj.page_bits) & (tlb_obj.entries.size() - 1);
+        if (!tlb_obj.entries[index].host_base) {
+            make_tlb_entry_unmatchable(tlb_obj, index, true, true, true);
+        }
     }
 
     void dynarmic_core::flush_tlb() {
         tlb_obj.Flush();
+        make_tlb_unmatchable(tlb_obj);
     }
 
     void dynarmic_core::clear_instruction_cache() {

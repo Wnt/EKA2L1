@@ -26,11 +26,14 @@
 #include <common/cvt.h>
 #include <common/log.h>
 #include <common/random.h>
+#include <common/stall.h>
 #include <common/thread.h>
+#include <common/watchdog.h>
 #include <common/time.h>
 #include <common/vecx.h>
 #include <qt/cmdhandler.h>
 #include <qt/displaywidget.h>
+#include <qt/qt_log.h>
 #include <qt/seh_handler.h>
 #include <qt/state.h>
 #include <qt/thread.h>
@@ -52,10 +55,26 @@
 #endif
 
 #include <QApplication>
+#include <QTimer>
 #include <QWindow>
 
 #include <qt/mainwindow.h>
 #include <iostream>
+
+// The input callbacks below run on the graphics thread and call straight into the UI,
+// so this lock is one of the places the two threads can meet head on. Waiting for it
+// untimed is a freeze with nothing in the log; this waits exactly as long but names
+// what it is waiting for if it takes too long.
+static std::unique_lock<std::timed_mutex> lock_reporting_stall(std::timed_mutex &mut, const char *what) {
+    std::unique_lock<std::timed_mutex> lock(mut, std::defer_lock);
+
+    eka2l1::common::wait_reporting_stall(eka2l1::FRONTEND_UI, what,
+        [&](const std::uint64_t timeout_us) {
+            return lock.try_lock_for(std::chrono::microseconds(timeout_us));
+        });
+
+    return lock;
+}
 
 static eka2l1::drivers::input_event make_mouse_event_driver(const float x, const float y, const float z, const int button, const int action,
     const int mouse_id) {
@@ -84,7 +103,7 @@ static void on_ui_window_mouse_evt(void *userdata, eka2l1::vec3 mouse_pos, int b
 
     eka2l1::desktop::emulator *emu = reinterpret_cast<eka2l1::desktop::emulator *>(userdata);
 
-    const std::lock_guard<std::mutex> guard(emu->lockdown);
+    const auto guard = lock_reporting_stall(emu->lockdown, "the UI lock to deliver a mouse event");
     if (emu->ui_main && emu->ui_main->deliver_overlay_mouse_event(mouse_pos, button, action, mouse_id)) {
         return;
     }
@@ -133,7 +152,7 @@ static void on_ui_window_key_release(void *userdata, const int key) {
     eka2l1::desktop::emulator *emu = reinterpret_cast<eka2l1::desktop::emulator *>(userdata);
     auto key_evt = make_key_event_driver(key, eka2l1::drivers::key_state::released);
 
-    const std::lock_guard<std::mutex> guard(emu->lockdown);
+    const auto guard = lock_reporting_stall(emu->lockdown, "the UI lock to deliver a key release");
     if (emu->ui_main && emu->ui_main->deliver_key_event(static_cast<std::uint32_t>(key), false)) {
         return;
     }
@@ -145,7 +164,7 @@ static void on_ui_window_key_press(void *userdata, const int key) {
     eka2l1::desktop::emulator *emu = reinterpret_cast<eka2l1::desktop::emulator *>(userdata);
     auto key_evt = make_key_event_driver(key, eka2l1::drivers::key_state::pressed);
 
-    const std::lock_guard<std::mutex> guard(emu->lockdown);
+    const auto guard = lock_reporting_stall(emu->lockdown, "the UI lock to deliver a key press");
     if (emu->ui_main && emu->ui_main->deliver_key_event(static_cast<std::uint32_t>(key), true)) {
         return;
     }
@@ -156,6 +175,18 @@ static void on_ui_window_key_press(void *userdata, const int key) {
 namespace eka2l1::desktop {
     static constexpr const char *graphics_driver_thread_name = "Graphics thread";
     static constexpr const char *os_thread_name = "Symbian OS thread";
+    static constexpr const char *ui_thread_name = "UI thread";
+
+    // Only for the handshakes that are meant to end. init_event, pause_event and
+    // kill_event are each waited on until the user does something -- configure a
+    // device, resume, quit -- so they can sit unsignalled for hours without anything
+    // being wrong, and reporting them as stalls would be crying wolf.
+    static void wait_event_reporting_stall(common::event &evt, const char *what) {
+        common::wait_reporting_stall(FRONTEND_CMDLINE, what,
+            [&](const std::uint64_t timeout_us) {
+                return evt.wait_for(timeout_us);
+            });
+    }
 
     static int graphics_driver_thread_initialization(emulator &state) {
         // Halloween decoration breath of the graphics
@@ -205,7 +236,7 @@ namespace eka2l1::desktop {
 
         state.joystick_controller = drivers::new_emu_controller(eka2l1::drivers::controller_type::sdl2);
         state.joystick_controller->on_button_event = [&](int jid, int button, bool pressed) {
-            const std::lock_guard<std::mutex> guard(state.lockdown);
+            const auto guard = lock_reporting_stall(state.lockdown, "the UI lock to deliver a controller button event");
             auto evt = make_controller_event_driver(jid, button, pressed);
 
             // If the handler accepts it
@@ -214,7 +245,7 @@ namespace eka2l1::desktop {
             }
         };
         state.joystick_controller->on_joy_move = [&](int jid, int button, float axisx, float axisy) {
-            const std::lock_guard<std::mutex> guard(state.lockdown);
+            const auto guard = lock_reporting_stall(state.lockdown, "the UI lock to deliver a controller stick movement");
             auto evt = make_controller_event_driver(jid, button, axisx, axisy);
 
             state.ui_main->controller_event_handler(evt);
@@ -227,7 +258,8 @@ namespace eka2l1::desktop {
 
     static int graphics_driver_thread_deinitialization(emulator &state) {
         if (state.stage_two_inited)
-            state.graphics_event.wait();
+            wait_event_reporting_stall(state.graphics_event,
+                "the Symbian OS thread to release the graphics driver during shutdown");
 
         state.joystick_controller->stop_polling();
         state.graphics_driver.reset();
@@ -287,7 +319,8 @@ namespace eka2l1::desktop {
             state.init_done_event.set();
 
             if (first_time) {
-                state.graphics_event.wait();
+                wait_event_reporting_stall(state.graphics_event,
+                    "the graphics driver to finish initialising");
                 first_time = false;
             }
 
@@ -306,6 +339,8 @@ namespace eka2l1::desktop {
         _set_se_translator(seh_handler_translator_func);
 #endif
 
+        common::watched_thread os_watch(os_thread_name);
+
         while (!state.should_emu_quit) {
 #if ENABLE_SEH_HANDLER
             try {
@@ -321,7 +356,10 @@ namespace eka2l1::desktop {
             }
 #endif
 
+            os_watch.beat();
+
             if (state.should_emu_pause && !state.should_emu_quit) {
+                const common::parked_scope parked("the emulator being paused");
                 state.pause_event.wait();
             }
         }
@@ -353,11 +391,22 @@ namespace eka2l1::desktop {
     }
 
     int emulator_entry(QApplication &application, emulator &state, const int argc, const char **argv) {
+        // The other two threads name themselves as they start. This one is the process's
+        // first thread and never did, which left every line it logs unattributed. Log
+        // name only: everything Qt spawns is created from this thread and would
+        // otherwise inherit the name at the OS level.
+        eka2l1::common::set_thread_log_name(ui_thread_name);
+
         state.stage_one();
+
+        // The logger exists from here on, so anything Qt said while it did not can be
+        // written down now.
+        drain_early_qt_messages();
 
         // Instantiate UI and High-level interface threads
         std::thread os_thread_obj(os_thread, std::ref(state));
-        state.init_done_event.wait();
+        wait_event_reporting_stall(state.init_done_event,
+            "the Symbian OS thread to finish its first initialisation attempt");
 
         eka2l1::common::arg_parser parser(argc, argv);
 
@@ -407,6 +456,18 @@ namespace eka2l1::desktop {
             }
         }
 
+        // A timer keeps firing for as long as the event loop turns, so the beats
+        // stopping means the UI thread itself is stuck.
+        common::watched_thread ui_watch(ui_thread_name);
+        QTimer ui_heartbeat;
+
+        QObject::connect(&ui_heartbeat, &QTimer::timeout, &application, [&ui_watch]() {
+            ui_watch.beat();
+        });
+
+        ui_heartbeat.start(250);
+        common::start_watchdog();
+
         state.ui_main = new main_window(application, nullptr, state);
         state.ui_main->setWindowTitle(get_emulator_window_title());
         state.ui_main->load_and_show();
@@ -424,6 +485,8 @@ namespace eka2l1::desktop {
         }
 
         const int exec_code = application.exec();
+
+        common::stop_watchdog();
         kill_emulator(state);
 
         // Wait for OS thread to die
