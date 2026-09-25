@@ -335,6 +335,23 @@ namespace eka2l1::epoc {
         return 8;
     }
 
+    std::int32_t twips_to_pixels(const epocver ver, const std::int32_t twips) {
+        if (ver == epocver::epoc7) {
+            // FNTSTORE CFontStore::VerticalTwipsToPixels rounds to the nearest pixel with the per-mille
+            // ratio the client set (9780 on Series 80): ((twips * 1000) + ratio / 2) / ratio. Truncating
+            // turned Sheet's 176-twip formula-bar font (18 px: 176 * 200 / 1956 = 17.99) into 17 px, and
+            // the nearest-height match then handed out System bold 16 instead of System 18.
+            constexpr std::int64_t RATIO_PER_MILLE = 9780;
+            const std::int64_t scaled = static_cast<std::int64_t>(twips) * 1000;
+            if (scaled >= 0) {
+                return static_cast<std::int32_t>((scaled + RATIO_PER_MILLE / 2) / RATIO_PER_MILLE);
+            }
+            return -static_cast<std::int32_t>((-scaled + RATIO_PER_MILLE / 2) / RATIO_PER_MILLE);
+        }
+
+        return static_cast<std::int32_t>(static_cast<float>(twips) / get_approximate_pixel_to_twips_mul(ver));
+    }
+
     std::int32_t pixels_to_twips(const epocver ver, const std::int32_t pixels) {
         const double twips = static_cast<double>(pixels) * get_approximate_pixel_to_twips_mul(ver);
 

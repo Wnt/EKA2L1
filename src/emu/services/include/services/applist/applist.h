@@ -315,6 +315,7 @@ namespace eka2l1 {
          * \brief Get app icon bitmap handles.
          */
         void get_app_icon(service::ipc_context &ctx);
+        void get_app_icon_by_uid(service::ipc_context &ctx);
 
         void get_app_icon_sizes(service::ipc_context &ctx);
         void get_native_executable_name_if_non_native(service::ipc_context &ctx);
@@ -402,4 +403,13 @@ namespace eka2l1 {
 
         void add_app_uid_to_host_launch_name(const epoc::uid app_uid, const std::u16string &host_launch_name);
     };
+
+    /**
+     * \brief Icon pair answering a TInt icon request (Symbian 7.0s EAppListServAppIconByUid, op 16).
+     *
+     * The 7.0s server reads the TInt as an index into the AIF's icon list; a value outside the list is taken
+     * as a side in pixels and handed to by_side.
+     */
+    std::size_t applist_icon_pair_for_int_request(const std::size_t pair_count, const std::int32_t request,
+        const std::function<std::size_t(std::int32_t)> &by_side);
 }
