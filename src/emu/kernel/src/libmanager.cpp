@@ -1230,12 +1230,11 @@ namespace eka2l1::hle {
         }
 
         if (kern_->get_epoc_version() == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV")
-            && (svcnum == 0xC00079 || svcnum == 0xC0004A)) {
-            // Bootstrap only: RequestEvent and RTimer::Lock must mark their status
-            // pending. Leaving it at zero makes their active objects consume another
-            // request's wakeup (including the server receive), stranding IPC clients.
-            // No raw input delivery or display-clock completion is implemented here.
-            const address status_addr = kern_->get_cpu()->get_reg(svcnum == 0xC00079 ? 1 : 0);
+            && svcnum == 0xC00079) {
+            // Bootstrap only: RequestEvent must mark its status pending. Otherwise
+            // its active object can consume another request's wakeup (including the server receive), stranding IPC clients.
+            // Raw input delivery remains pending for the separate ROM-input work.
+            const address status_addr = kern_->get_cpu()->get_reg(1);
             auto *status = eka2l1::ptr<epoc::request_status>(status_addr).get(kern_->crr_process());
             if (status) {
                 status->set(epoc::status_pending, true);

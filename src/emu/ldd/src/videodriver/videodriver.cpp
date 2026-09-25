@@ -143,14 +143,26 @@ namespace eka2l1::ldd {
         if (kern->get_epoc_version() == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV")) {
             // RAE-6 hal.dll: controls 8/9 are hardware mode index/count (not
             // TDisplayMode); control 16 takes that index by value and a video-info
-            // descriptor in arg2. The fixed kiosk panel exposes one RGB565 mode.
+            // descriptor in arg2. The host exposes one native hardware mode;
+            // its size, stride, format and framebuffer come from display HAL.
             if (n == 8 || n == 9 || n == 13 || n == 3 || n == 4) {
                 auto *value = reinterpret_cast<std::int32_t *>(arg1.get(r->owning_process()));
                 if (!value) {
                     return epoc::error_argument;
                 }
-                *value = (n == 9 || n == 13 || n == 4) ? 1 : 0;
+                // There is no analog contrast adjustment on the host panel.
+                *value = (n == 9 || n == 13) ? 1 : 0;
                 return epoc::error_none;
+            }
+            if (n == 10) {
+                return arg1.ptr_address() == 0 ? epoc::error_none : epoc::error_argument;
+            }
+            if (n == 5) {
+                return arg1.ptr_address() == 0 ? epoc::error_none : epoc::error_not_supported;
+            }
+            if (n == 11 || n == 12) {
+                // Palette get/set is unavailable on the true-colour host panel.
+                return epoc::error_not_supported;
             }
             if (n == 16) {
                 if (arg1.ptr_address() != 0) {
@@ -179,6 +191,14 @@ namespace eka2l1::ldd {
     std::int32_t video_driver_channel::do_request(epoc::notify_info info, const std::uint32_t n,
         const eka2l1::ptr<void> arg1, const eka2l1::ptr<void> arg2,
         const bool is_supervisor) {
+        if (kern->get_epoc_version() == epocver::epoc7 && std::getenv("EKA2L1_ROM_WSERV")) {
+            // hal.dll uses request 0/1 for display on/off and waits on the
+            // status, regardless of DoRequest's synchronous result. The kiosk
+            // panel is always on; explicitly reject power-off rather than
+            // returning success with a request which can never complete.
+            info.complete(n == 0 ? epoc::error_none : epoc::error_not_supported);
+            return epoc::error_none;
+        }
         LOG_TRACE(LDD_MMCIF, "Unimplemented video driver request opcode {}", n);
         return 0;
     }
