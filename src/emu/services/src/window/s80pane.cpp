@@ -80,9 +80,10 @@ namespace eka2l1::epoc {
     }
 
     s80_status_pane::~s80_status_pane() {
-        if (clock_font_) {
-            clock_font_->deref();
-        }
+        // The pane lives as long as the window server, which the kernel wipes out after the font and bitmap
+        // server: by now clock_font_ points into FBS's freed object container, and deref() on it called through a
+        // dead vtable (host SIGSEGV on every quit after the pane was drawn). The reference goes with FBS.
+        clock_font_ = nullptr;
     }
 
     // Local time as the ROM server's clock gets it: universal time plus the guest locale's offset
