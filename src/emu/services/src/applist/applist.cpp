@@ -1911,7 +1911,28 @@ namespace eka2l1 {
             pr->set_uid_type(current_uid_type);
         }
 
-        // Add it into our app running list
+        // Eikon connects to FBS before Windowserver. Host launch requests can
+        // arrive while the prestarted ROM FBS is still scanning its font store.
+        if (epoc::rom_fbs_enabled(kern->get_epoc_version())
+            && !kern->get_by_name<service::server>("Fontbitmapserver")) {
+            for (const auto &object : kern->get_process_list()) {
+                auto *fbs = static_cast<kernel::process *>(object.get());
+                if (common::compare_ignore_case(fbs->get_exe_path(), std::u16string(u"Z:\\System\\Libs\\fbserv.exe")) == 0
+                    && fbs->get_exit_type() == kernel::entity_exit_type::pending) {
+                    const auto pending_id = pr->unique_id();
+                    auto *kernel = kern;
+                    fbs->rendezvous([kernel, pending_id](int result) {
+                        if (kernel->wipeout_in_progress()) return;
+                        auto *pending = kernel->get_by_id<kernel::process>(pending_id);
+                        if (!pending || pending->get_exit_type() != kernel::entity_exit_type::pending) return;
+                        if (result == epoc::error_none) pending->run();
+                        else pending->kill(kernel::entity_exit_type::terminate, u"FBS startup", result);
+                    });
+                    LOG_INFO(SERVICE_APPLIST, "Application launch waits for ROM FBS readiness");
+                    return true;
+                }
+            }
+        }
         return pr->run();
     }
 
