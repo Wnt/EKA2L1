@@ -61,6 +61,19 @@ namespace eka2l1::epoc::adapter {
         virtual bool get_face_attrib(const std::size_t idx, open_font_face_attrib &face_attrib) = 0;
 
         /**
+         * @brief Bitmap typefaces only: what CFontStore::TypefaceSupport reports for them.
+         *
+         * @param idx       Index of the typeface.
+         * @param flags     On return, the TTypeface flags stored with the typeface (proportional, serif, symbol).
+         * @param heights   On return, the distinct heights of its font bitmaps in pixels, ascending.
+         *
+         * @returns True if the face is a bitmap typeface and the values were filled.
+         */
+        virtual bool get_bitmap_typeface_support(const std::size_t idx, std::uint32_t &flags, std::vector<std::int32_t> &heights) {
+            return false;
+        }
+
+        /**
          * @brief Rasterize one glyph.
          *
          * @param bmp_type In, the format the caller would like, or
