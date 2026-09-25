@@ -859,7 +859,9 @@ namespace eka2l1::epoc {
             return epoc::error_bad_handle;
         }
 
-        if ((int)msg->args.get_arg_type(param) & (int)ipc_arg_type::flag_des) {
+        // EKA1 messages carry no argument types: every slot is a pointer, and a server
+        // asking for a descriptor length means it knows the slot holds one.
+        if (kern->is_eka1() || ((int)msg->args.get_arg_type(param) & (int)ipc_arg_type::flag_des)) {
             epoc::desc_base *base = eka2l1::ptr<epoc::desc_base>(msg->args.args[param]).get(msg->own_thr->owning_process());
 
             // The slot is typed as a descriptor, but the client may still have passed
@@ -888,7 +890,7 @@ namespace eka2l1::epoc {
 
         const ipc_arg_type type = msg->args.get_arg_type(param);
 
-        if ((int)type & (int)ipc_arg_type::flag_des) {
+        if (kern->is_eka1() || ((int)type & (int)ipc_arg_type::flag_des)) {
             kernel::process *own_pr = msg->own_thr->owning_process();
             epoc::des8 *base = eka2l1::ptr<epoc::des8>(msg->args.args[param]).get(own_pr);
 
@@ -6675,6 +6677,7 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0x8000DF, property_get_int),
         BRIDGE_REGISTER(0x8000E2, property_find_set_int),
         BRIDGE_REGISTER(0x8000E4, message_get_des_length),
+        BRIDGE_REGISTER(0x8000E5, message_get_des_max_length),
         BRIDGE_REGISTER(0x8000E6, message_ipc_copy_eka1),
         BRIDGE_REGISTER(0x8000EA, message_queue_notify_space_available),
         BRIDGE_REGISTER(0x8000EB, message_queue_notify_data_available),
