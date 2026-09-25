@@ -2502,12 +2502,85 @@ namespace eka2l1 {
         }
     }
 
+    // EKA2L1_WS_DUMP_SECS=<n> (diagnostic): every n emulated seconds, log each screen's window tree --
+    // groups with their name, owner thread, priority and ordinal order; windows with id, owner, extent,
+    // visibility, clear colour and visible region. Error level so a killed run still has it. Names
+    // which window covers or fails to cover a region (the status pane, a title bar) without guessing.
+    static int ws_tree_dump_evt = -1;
+
+    static void ws_tree_dump_level(epoc::window *win, const int depth) {
+        for (; win; win = win->sibling) {
+            std::string owner = "?";
+            if (win->client && win->client->get_client()) {
+                owner = win->client->get_client()->name();
+            }
+
+            const std::string indent(static_cast<std::size_t>(depth) * 2, ' ');
+
+            switch (win->type) {
+            case epoc::window_kind::group: {
+                epoc::window_group *group = reinterpret_cast<epoc::window_group *>(win);
+                LOG_ERROR(SERVICE_WINDOW, "WSTREE {}group {} '{}' owner {} pri {} flags 0x{:x}", indent, win->id,
+                    common::ucs2_to_utf8(group->name), owner, win->priority, win->flags);
+                break;
+            }
+
+            case epoc::window_kind::client: {
+                epoc::canvas_base *canvas = reinterpret_cast<epoc::canvas_base *>(win);
+                eka2l1::rect bound;
+                bool first = true;
+                for (const eka2l1::rect &r : canvas->visible_region.rects_) {
+                    if (first) {
+                        bound = r;
+                        first = false;
+                        continue;
+                    }
+                    const int x0 = std::min(bound.top.x, r.top.x);
+                    const int y0 = std::min(bound.top.y, r.top.y);
+                    const int x1 = std::max(bound.top.x + bound.size.x, r.top.x + r.size.x);
+                    const int y1 = std::max(bound.top.y + bound.size.y, r.top.y + r.size.y);
+                    bound = eka2l1::rect({ x0, y0 }, { x1 - x0, y1 - y0 });
+                }
+                LOG_ERROR(SERVICE_WINDOW, "WSTREE {}window {} owner {} type {} pri {} rect ({},{} {}x{}) {} clear {} 0x{:x} "
+                    "visible-region {} rects bound ({},{} {}x{})", indent, win->id, owner, static_cast<int>(canvas->win_type),
+                    win->priority, canvas->abs_rect.top.x, canvas->abs_rect.top.y, canvas->abs_rect.size.x,
+                    canvas->abs_rect.size.y, (win->flags & epoc::window::flags_visible) ? "visible" : "hidden",
+                    canvas->clear_color_enable ? "on" : "off", canvas->clear_color, canvas->visible_region.rects_.size(),
+                    bound.top.x, bound.top.y, bound.size.x, bound.size.y);
+                break;
+            }
+
+            default:
+                LOG_ERROR(SERVICE_WINDOW, "WSTREE {}{} {} owner {}", indent,
+                    (win->type == epoc::window_kind::top_client) ? "top-client" : "node", win->id, owner);
+                break;
+            }
+
+            ws_tree_dump_level(win->child, depth + 1);
+        }
+    }
+
     void window_server::do_base_init() {
         load_wsini();
         parse_wsini();
         init_screens();
         init_ws_mem();
         init_repeatable();
+
+        if (const char *dump_env = std::getenv("EKA2L1_WS_DUMP_SECS")) {
+            const std::int64_t period_us = std::max<std::int64_t>(1, std::atoll(dump_env)) * 1000000;
+            ntimer *timing = kern->get_ntimer();
+            ws_tree_dump_evt = timing->register_event("WsTreeDump", [this, timing, period_us](std::uint64_t, std::uint64_t) {
+                kern->lock();
+                for (epoc::screen *scr = screens; scr; scr = scr->next) {
+                    LOG_ERROR(SERVICE_WINDOW, "WSTREE screen {} begin", scr->number);
+                    ws_tree_dump_level(scr->root.get(), 0);
+                }
+                kern->unlock();
+                timing->schedule_event(period_us, ws_tree_dump_evt, 0);
+            });
+            timing->schedule_event(period_us, ws_tree_dump_evt, 0);
+        }
 
         loaded = true;
     }
