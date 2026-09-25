@@ -96,10 +96,7 @@ namespace eka2l1::epoc {
         std::optional<epoc::locale> loc = prop ? prop->get_pkg<epoc::locale>() : std::nullopt;
 
         if (loc) {
-            seconds += loc->universal_time_offset_;
-            if (loc->daylight_saving_ & loc->home_daylight_saving_zone_) {
-                seconds += 3600;
-            }
+            seconds += epoc::locale_effective_utc_offset(*loc);
         } else {
             seconds += kern->utc_offset();
         }

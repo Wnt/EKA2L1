@@ -1971,6 +1971,10 @@ namespace eka2l1 {
         return utc_offset_;
     }
 
+    void kernel_system::set_utc_offset(const std::int32_t offset_secs) {
+        utc_offset_ = offset_secs;
+    }
+
     void kernel_system::set_base_time(std::uint64_t time) {
         base_time_ = time;
     }

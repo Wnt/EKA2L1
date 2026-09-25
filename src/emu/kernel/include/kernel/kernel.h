@@ -343,6 +343,7 @@ namespace eka2l1 {
         std::uint64_t base_time_;
         std::uint32_t cpu_hz_;
         std::int32_t utc_offset_;
+        bool home_time_follows_locale_ = false;
 
         epocver kern_ver_;
         language lang_;
@@ -454,6 +455,18 @@ namespace eka2l1 {
         std::uint64_t universal_time();
         std::uint64_t home_time();
         std::int32_t utc_offset();
+
+        // Home time = universal time + this. On EKA1 the guest's TLocale owns it (TLocale::Set).
+        void set_utc_offset(const std::int32_t offset_secs);
+
+        // True when TLocale::Set (EKA1) moves home time with the locale's UTC offset.
+        bool home_time_follows_locale() const {
+            return home_time_follows_locale_;
+        }
+
+        void set_home_time_follows_locale(const bool follows) {
+            home_time_follows_locale_ = follows;
+        }
         void set_base_time(std::uint64_t time);
 
         void reschedule();

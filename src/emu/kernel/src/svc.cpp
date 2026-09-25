@@ -6027,6 +6027,25 @@ namespace eka2l1::epoc {
         }
 
         prop->set<epoc::locale>(*loc);
+
+        // EKA1 keeps home time, and universal time is home time minus TLocale::UniversalTimeOffset()
+        // (the zone offset, one hour more while the home zone is on summer time). The emulator keeps
+        // universal time, so the new offset moves home time: the world server's home-city change
+        // (Clock > Change city) takes effect in User::HomeTime, RTimer::At and every clock.
+        // Only where the device's locale was set up for it (Series 80): other EKA1 devices keep
+        // the host's offset as before.
+        if (!kern->home_time_follows_locale()) {
+            return;
+        }
+
+        const std::int32_t offset = epoc::locale_effective_utc_offset(*loc);
+        if (offset != kern->utc_offset()) {
+            LOG_INFO(KERNEL, "TLocale::Set: UTC offset {} s -> {} s (zone {} s, summer time {}), date format {}, time format {}",
+                kern->utc_offset(), offset, loc->universal_time_offset_,
+                epoc::locale_home_on_summer_time(*loc) ? "on" : "off",
+                static_cast<int>(loc->date_format_), static_cast<int>(loc->time_format_));
+        }
+        kern->set_utc_offset(offset);
     }
 
     BRIDGE_FUNC(std::int32_t, semaphore_find_next, epoc::des16 *found_result, std::int32_t *next_con_handle, epoc::desc16 *match) {
@@ -6938,6 +6957,7 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0xC00046, thread_request_complete_eka1),
         BRIDGE_REGISTER(0xC00047, timer_cancel),
         BRIDGE_REGISTER(0xC00048, timer_after_eka1),
+        BRIDGE_REGISTER(0xC00049, timer_at_eka1),
         BRIDGE_REGISTER(0xC0004E, request_signal),
         BRIDGE_REGISTER(0xC0005E, after),
         BRIDGE_REGISTER(0xC00069, locale_set_eka1),

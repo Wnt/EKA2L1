@@ -770,6 +770,18 @@ namespace eka2l1::epoc {
     };
 #pragma pack(pop)
 
+    // TLocale::QueryHomeHasDaylightSavingOn(): (iHomeDaylightSavingZone | EDstHome) & iDaylightSaving.
+    inline bool locale_home_on_summer_time(const locale &loc) {
+        return (loc.daylight_saving_ & (loc.home_daylight_saving_zone_ | daylight_saving_zone_dst_home)) != 0;
+    }
+
+    // Home time minus universal time on EKA1: the zone's offset, plus an hour while the home zone
+    // is on summer time.
+    inline std::int32_t locale_effective_utc_offset(const locale &loc) {
+        const bool summer = locale_home_on_summer_time(loc);
+        return loc.universal_time_offset_ + (summer ? 3600 : 0);
+    }
+
 #pragma pack(push, 1)
     struct locale_language {
         epoc::language language;
