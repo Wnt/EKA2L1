@@ -498,13 +498,18 @@ namespace eka2l1 {
     }
 
     void fbs_server::connect(service::ipc_context &context) {
-        if (!shared_chunk && !large_chunk) {
-            initialize_server();
-        }
+        ensure_initialized();
 
         // Create new server client
         create_session<fbscli>(&context);
         context.complete(epoc::error_none);
+    }
+
+    void fbs_server::ensure_initialized() {
+        const std::lock_guard<std::recursive_mutex> guard(allocator_lock_);
+        if (!shared_chunk && !large_chunk) {
+            initialize_server();
+        }
     }
 
     service::uid fbs_server::init() {
