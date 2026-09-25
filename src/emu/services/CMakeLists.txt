@@ -330,6 +330,7 @@ add_library(epocservs
         src/window/common.cpp
         src/window/fifo.cpp
         src/window/io.cpp
+        src/window/keytran.cpp
         src/window/scheduler.cpp
         src/window/screen.cpp
         src/window/surface.cpp
@@ -355,6 +356,7 @@ target_link_libraries(epocservs PUBLIC
 
 target_link_libraries(epocservs PRIVATE
         config
+        cpu
         epoc
         epockern
         epocpkg

@@ -155,6 +155,7 @@ namespace eka2l1::config {
         bool disable_display_content_scale { false };
         bool enable_hw_gles1 { true };
         bool hide_system_apps { true };
+        int keyboard_layout_index { 0 }; ///< Keyboard data library to load: 0 = EKDATA.DLL, n = EKDATA.<nn>.DLL (Symbian language code).
 
         keybind_profile keybinds;
 

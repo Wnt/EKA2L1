@@ -118,6 +118,12 @@ namespace eka2l1::epoc {
 
     void window_key_shipper::add_new_event(const epoc::event &evt) {
         evts_.push_back(evt);
+        translated_.push_back(std::nullopt);
+    }
+
+    void window_key_shipper::add_new_event(const epoc::event &evt, const translated_key &key) {
+        evts_.push_back(evt);
+        translated_.push_back(key);
     }
 
     static const bool is_device_std_key_not_repeatable(const std_scan_code code) {
@@ -137,7 +143,10 @@ namespace eka2l1::epoc {
 
         int ui_rotation = focus->scr->ui_rotation;
 
-        for (auto &evt : evts_) {
+        for (std::size_t evt_index = 0; evt_index < evts_.size(); evt_index++) {
+            epoc::event &evt = evts_[evt_index];
+            const std::optional<translated_key> &translated = translated_[evt_index];
+
             evt.key_evt_.scancode = epoc::post_processing_scancode(static_cast<epoc::std_scan_code>(evt.key_evt_.scancode),
                 ui_rotation);
 
@@ -145,7 +154,7 @@ namespace eka2l1::epoc {
 
             // TODO: My assumption... For now.
             // Actually this smells like a hack
-            const bool repeatable = !is_device_std_key_not_repeatable(static_cast<epoc::std_scan_code>(evt.key_evt_.scancode));
+            bool repeatable = !is_device_std_key_not_repeatable(static_cast<epoc::std_scan_code>(evt.key_evt_.scancode));
 
             epoc::event extra_event = evt;
             extra_event.type = epoc::event_code::key;
@@ -153,17 +162,30 @@ namespace eka2l1::epoc {
             kernel_system *kern = focus->client->get_ws().get_kernel_system();
             ntimer *timing = kern->get_ntimer();
 
-            const std::uint32_t the_code = epoc::map_scancode_to_keycode(static_cast<std_scan_code>(
-                evt.key_evt_.scancode));
+            std::uint32_t the_code = 0;
 
-            const std::uint64_t data_for_repeatable = extra_event.key_evt_.scancode | (static_cast<std::uint64_t>(the_code) << 32);
+            if (translated) {
+                // The device's keyboard tables decided: a key event may follow a key-up too (Ctrl+digits ends
+                // on Ctrl up), and auto-repeat is whatever the table says.
+                the_code = translated->code;
+                dont_send_extra_key_event = !translated->produce;
+                repeatable = (translated->modifiers & event_modifier_repeatable) != 0;
+            } else {
+                the_code = epoc::map_scancode_to_keycode(static_cast<std_scan_code>(evt.key_evt_.scancode));
+            }
+
+            const std::uint32_t repeat_code = (translated && (evt.type == epoc::event_code::key_up)) ? translated->repeat_code : the_code;
+            const std::uint64_t data_for_repeatable = extra_event.key_evt_.scancode | (static_cast<std::uint64_t>(repeat_code) << 32);
 
             if (!dont_send_extra_key_event) {
                 extra_event.key_evt_.code = the_code;
                 extra_event.time = kern->universal_time();
 
-                if (repeatable)
+                if (translated) {
+                    extra_event.key_evt_.modifiers = translated->modifiers;
+                } else if (repeatable) {
                     extra_event.key_evt_.modifiers = event_modifier_repeatable;
+                }
             }
 
             // A captured key goes to the winning capturer instead of the focus: CaptureKey requests are
@@ -198,8 +220,14 @@ namespace eka2l1::epoc {
                 kern->unlock();
 
                 if ((evt.type == epoc::event_code::key_down) && repeatable) {
+                    serv_->repeat_modifiers_ = extra_event.key_evt_.modifiers | event_modifier_repeatable;
                     timing->schedule_event(serv_->initial_repeat_delay_, serv_->repeatable_event_, data_for_repeatable);
                 }
+            }
+
+            if (translated && (evt.type == epoc::event_code::key_up)) {
+                // Auto-repeat of a translated key belongs to its key-down, whatever this release produced.
+                repeatable = (translated->repeat_code != 0);
             }
 
             if ((evt.type == epoc::event_code::key_up) && repeatable) {
@@ -214,5 +242,6 @@ namespace eka2l1::epoc {
         }
 
         evts_.clear();
+        translated_.clear();
     }
 }

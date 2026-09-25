@@ -62,6 +62,7 @@
 
 #include <loader/rom.h>
 
+#include <cstdlib>
 #include <optional>
 #include <string>
 
@@ -1687,6 +1688,7 @@ namespace eka2l1 {
         , initial_repeat_delay_(0)
         , next_repeat_delay_(0)
         , repeatable_event_(0)
+        , repeat_modifiers_(epoc::event_modifier_repeatable)
         , config_flags(0) {
         REGISTER_IPC(window_server, init, ws_mess_init, "Ws::Init");
         REGISTER_IPC(window_server, send_to_command_buffer, ws_mess_command_buffer, "Ws::CommandBuffer");
@@ -1823,7 +1825,8 @@ namespace eka2l1 {
             found_correspond_mapping = false;
         }
 
-        guest_evt_.key_evt_.scancode = key_received.value();
+        // A binding target may carry modifiers above the scan code (see make_s80_keybind_profile).
+        guest_evt_.key_evt_.scancode = key_received.value() & 0xFFFF;
         guest_evt_.key_evt_.repeats = 0; // TODO?
         guest_evt_.key_evt_.modifiers = 0;
 
@@ -1971,17 +1974,14 @@ namespace eka2l1 {
         switch (input_event.type_) {
         case drivers::input_event_type::key:
         case drivers::input_event_type::key_raw:
-            if (make_key_event(input_mapping.key_input_map, input_event, guest_event)) {
-                // NOTE: Current workaround for S80 layout ! Remapping a bit until we figured out
-                // what's best keyboard layout for both PCs and Android...
-                if (sys->is_s80_device_active()) {
-                    std::int32_t scancode = guest_event.key_evt_.scancode;
-                    if (scancode == epoc::std_key_device_3) {
-                        guest_event.key_evt_.scancode = epoc::std_key_enter;
-                    } else if (scancode == '5') {
-                        guest_event.key_evt_.scancode = epoc::std_key_space;
-                    }
+            if (key_translator_ && key_translator_->loaded()) {
+                // The device's own keyboard tables translate the key (Series 80).
+                shipped = handle_translated_key_input(input_event);
+                break;
+            }
 
+            if (make_key_event(input_mapping.key_input_map, input_event, guest_event)) {
+                if (sys->is_s80_device_active()) {
                     if (s80_handle_app_key(guest_event)) {
                         // The application button belongs to the shell, never to the focused application.
                         break;
@@ -2454,20 +2454,188 @@ namespace eka2l1 {
         }
     }
 
+    namespace epoc {
+        namespace {
+            // Host key codes of the desktop frontend (Qt::Key values).
+            constexpr std::uint32_t HOST_KEY_ESCAPE = 0x01000000;
+            constexpr std::uint32_t HOST_KEY_TAB = 0x01000001;
+            constexpr std::uint32_t HOST_KEY_BACKTAB = 0x01000002;
+            constexpr std::uint32_t HOST_KEY_BACKSPACE = 0x01000003;
+            constexpr std::uint32_t HOST_KEY_RETURN = 0x01000004;
+            constexpr std::uint32_t HOST_KEY_ENTER = 0x01000005;
+            constexpr std::uint32_t HOST_KEY_DELETE = 0x01000007;
+            constexpr std::uint32_t HOST_KEY_HOME = 0x01000010;
+            constexpr std::uint32_t HOST_KEY_END = 0x01000011;
+            constexpr std::uint32_t HOST_KEY_LEFT = 0x01000012;
+            constexpr std::uint32_t HOST_KEY_UP = 0x01000013;
+            constexpr std::uint32_t HOST_KEY_RIGHT = 0x01000014;
+            constexpr std::uint32_t HOST_KEY_DOWN = 0x01000015;
+            constexpr std::uint32_t HOST_KEY_PAGE_UP = 0x01000016;
+            constexpr std::uint32_t HOST_KEY_PAGE_DOWN = 0x01000017;
+            constexpr std::uint32_t HOST_KEY_SHIFT = 0x01000020;
+            constexpr std::uint32_t HOST_KEY_CONTROL = 0x01000021;
+            constexpr std::uint32_t HOST_KEY_ALT = 0x01000023;
+            constexpr std::uint32_t HOST_KEY_CAPS_LOCK = 0x01000024;
+            constexpr std::uint32_t HOST_KEY_F1 = 0x01000030;
+            constexpr std::uint32_t HOST_KEY_MENU = 0x01000055;
+            constexpr std::uint32_t HOST_KEY_ALT_GR = 0x01001103;
+
+            // A binding target may carry modifiers to type the key with, above the scan code.
+            constexpr std::uint32_t BIND_TARGET_SCANCODE_MASK = 0xFFFF;
+            constexpr std::uint32_t BIND_TARGET_MODIFIER_SHIFT = 16;
+
+            constexpr std::uint32_t bind_with(const std::uint32_t scancode, const std::uint32_t modifiers) {
+                return scancode | (modifiers << BIND_TARGET_MODIFIER_SHIFT);
+            }
+
+            // EKA2L1_KEYLOG=1 logs every host key and what the device's tables made of it.
+            bool key_log_enabled() {
+                static const bool enabled = (std::getenv("EKA2L1_KEYLOG") != nullptr);
+                return enabled;
+            }
+
+            bool is_printable_character(const std::uint32_t c) {
+                if ((c < 0x20) || (c == 0x7F) || ((c >= 0x80) && (c < 0xA0))) {
+                    return false;
+                }
+
+                // Private use: Symbian's special and non-character key codes live there.
+                if ((c >= 0xE000) && (c <= 0xF8FF)) {
+                    return false;
+                }
+
+                return c <= 0xFFFF;
+            }
+        }
+
+        /**
+         * \brief The Nokia 9300 keyboard on a desktop keyboard: fills a binding profile with the defaults.
+         *
+         * Printable characters do not need bindings, they are typed by character through the device's
+         * own tables (see handle_translated_key_input). These bindings cover the keys that have no
+         * character and the positions Ctrl and Chr combinations need.
+         */
+        void make_s80_keybind_profile(eka2l1::config::keybind_profile &profile) {
+            profile.keybinds.clear();
+
+            auto bind = [&](const std::uint32_t host_key, const std::uint32_t target) {
+                eka2l1::config::keybind kb;
+                kb.source.type = eka2l1::config::KEYBIND_TYPE_KEY;
+                kb.source.data.keycode = host_key;
+                kb.target = target;
+                profile.keybinds.push_back(kb);
+            };
+
+            // Command buttons 1-4 (top to bottom): F1-F4
+            for (std::uint32_t i = 0; i < 4; i++) {
+                bind(HOST_KEY_F1 + i, std_key_device_0 + i);
+            }
+
+            // Application buttons Desk, Telephone, Messaging, Web, Contacts, Documents, Calendar, My own: F5-F12
+            for (std::uint32_t i = 0; i < 8; i++) {
+                bind(HOST_KEY_F1 + 4 + i, std_key_application_0 + i);
+            }
+
+            // Joystick: F13 centre, F14 up, F15 down, F16 left, F17 right
+            bind(HOST_KEY_F1 + 12, std_key_device_a);
+            bind(HOST_KEY_F1 + 13, std_key_device_8);
+            bind(HOST_KEY_F1 + 14, std_key_device_9);
+            bind(HOST_KEY_F1 + 15, std_key_device_6);
+            bind(HOST_KEY_F1 + 16, std_key_device_7);
+
+            bind(HOST_KEY_MENU, std_key_menu);
+            bind(HOST_KEY_ESCAPE, std_key_escape);
+            bind(HOST_KEY_TAB, std_key_tab);
+            bind(HOST_KEY_BACKTAB, std_key_tab);
+            bind(HOST_KEY_BACKSPACE, std_key_backspace);
+            bind(HOST_KEY_RETURN, std_key_enter);
+            bind(HOST_KEY_ENTER, std_key_enter);
+            bind(' ', std_key_space);
+
+            bind(HOST_KEY_SHIFT, std_key_left_shift);
+            bind(HOST_KEY_CONTROL, std_key_left_ctrl);
+            bind(HOST_KEY_ALT_GR, std_key_left_func);
+            bind(HOST_KEY_ALT, std_key_left_func);
+            bind(HOST_KEY_CAPS_LOCK, std_key_caps_lock);
+
+            bind(HOST_KEY_LEFT, std_key_left_arrow);
+            bind(HOST_KEY_RIGHT, std_key_right_arrow);
+            bind(HOST_KEY_UP, std_key_up_arrow);
+            bind(HOST_KEY_DOWN, std_key_down_arrow);
+
+            // Desktop keys the Communicator has as combinations: Chr+joystick, Shift+Backspace.
+            bind(HOST_KEY_HOME, bind_with(std_key_device_6, event_modifier_func));
+            bind(HOST_KEY_END, bind_with(std_key_device_7, event_modifier_func));
+            bind(HOST_KEY_PAGE_UP, bind_with(std_key_device_8, event_modifier_func));
+            bind(HOST_KEY_PAGE_DOWN, bind_with(std_key_device_9, event_modifier_func));
+            bind(HOST_KEY_DELETE, bind_with(std_key_backspace, event_modifier_shift));
+
+            // Positions for Ctrl and Chr combinations.
+            for (std::uint32_t c = '0'; c <= '9'; c++) {
+                bind(c, c);
+            }
+
+            for (std::uint32_t c = 'A'; c <= 'Z'; c++) {
+                bind(c, c);
+            }
+
+            bind(',', std_key_comma);
+            bind('.', std_key_full_stop);
+            bind('/', std_key_forward_slash);
+            bind(';', std_key_semicolon);
+            bind('\'', std_key_single_quote);
+            bind('#', std_key_hash);
+            bind('=', std_key_equals);
+            bind('-', std_key_minus);
+            bind('[', std_key_square_bracket_left);
+            bind(']', std_key_square_bracket_right);
+            bind('\\', std_key_back_slash);
+        }
+
+        void load_s80_keybind_profile(eka2l1::config::keybind_profile &profile) {
+            static constexpr const char *S80_PROFILE_FILE = "bindings/s80.yml";
+
+            profile.keybinds.clear();
+            profile.deserialize(S80_PROFILE_FILE);
+
+            if (profile.keybinds.empty()) {
+                make_s80_keybind_profile(profile);
+
+                common::create_directories("bindings");
+                profile.serialize(S80_PROFILE_FILE);
+            }
+        }
+    }
+
     void window_server::init_key_mappings() {
         input_mapping.key_input_map.clear();
         input_mapping.button_input_map.clear();
 
         config::state *conf = kern->get_config();
 
-        for (auto &kb : conf->keybinds.keybinds) {
-            delete_key_mapping(kb.target);
+        std::vector<config::keybind> *binds = &conf->keybinds.keybinds;
+        config::keybind_profile s80_profile;
+
+        // A Series 80 Communicator has a full keyboard: it gets its own profile unless the user picked one.
+        const bool s80_profile_active = sys->is_s80_device_active() && (conf->current_keybind_profile == "default");
+
+        if (s80_profile_active) {
+            epoc::load_s80_keybind_profile(s80_profile);
+            binds = &s80_profile.keybinds;
+        }
+
+        for (auto &kb : *binds) {
+            if (!s80_profile_active) {
+                // One host key per target, so the settings dialog can rebind it. The Series 80 profile maps
+                // several host keys (Return and keypad Enter, Alt and AltGr...) to one device key on purpose.
+                delete_key_mapping(kb.target);
+            }
 
             bool is_mouse = (kb.source.type == config::KEYBIND_TYPE_MOUSE);
 
             if ((kb.source.type == config::KEYBIND_TYPE_KEY) || is_mouse) {
                 const std::uint32_t bind_keycode = (is_mouse ? epoc::KEYBIND_TYPE_MOUSE_CODE_BASE : 0) + kb.source.data.keycode;
-                input_mapping.key_input_map[bind_keycode] = static_cast<epoc::std_scan_code>(kb.target);
+                input_mapping.key_input_map[bind_keycode] = kb.target;
             } else if (kb.source.type == config::KEYBIND_TYPE_CONTROLLER) {
                 input_mapping.button_input_map[std::make_pair(kb.source.data.button.controller_id, kb.source.data.button.button_id)] = static_cast<epoc::std_scan_code>(kb.target);
             }
@@ -2480,8 +2648,258 @@ namespace eka2l1 {
         init_screens();
         init_ws_mem();
         init_repeatable();
+        init_key_translator();
 
         loaded = true;
+    }
+
+    void window_server::init_key_translator() {
+        if (!sys->is_s80_device_active() || key_translator_) {
+            return;
+        }
+
+        // The device is known for sure by now: pick its binding profile.
+        init_key_mappings();
+
+        config::state *conf = kern->get_config();
+        auto translator = std::make_unique<epoc::key_translator>();
+
+        bool ok = false;
+
+        // Like the window server, which loads EKDATA.DLL and then the keyboard's own EKDATA.<index>.
+        if (conf && (conf->keyboard_layout_index > 0)) {
+            ok = translator->load(kern, common::utf8_to_ucs2(fmt::format("ekdata.{:02d}.dll", conf->keyboard_layout_index)));
+        }
+
+        if (!ok) {
+            ok = translator->load(kern, u"ekdata.dll");
+        }
+
+        if (ok) {
+            key_translator_ = std::move(translator);
+        } else {
+            LOG_WARN(SERVICE_WINDOW, "No keyboard data library could be loaded; falling back to the built-in key table");
+        }
+    }
+
+    epoc::key_translator::result window_server::ship_raw_translated_key(const std::uint32_t scancode, const bool key_up,
+        const std::uint32_t repeat_code) {
+        epoc::event guest_event;
+        guest_event.time = kern->universal_time();
+        guest_event.type = key_up ? epoc::event_code::key_up : epoc::event_code::key_down;
+        guest_event.key_evt_.code = 0;
+        guest_event.key_evt_.scancode = static_cast<std::int32_t>(scancode);
+        guest_event.key_evt_.repeats = 0;
+        guest_event.key_evt_.modifiers = key_translator_->modifier_state();
+
+        // The application buttons belong to the shell unless a guest captured them.
+        if (sys->is_s80_device_active() && s80_handle_app_key(guest_event)) {
+            return epoc::key_translator::result{};
+        }
+
+        const epoc::key_translator::result res = key_translator_->translate(scancode, key_up);
+
+        guest_event.key_evt_.modifiers = key_translator_->modifier_state();
+
+        if (epoc::key_log_enabled()) {
+            LOG_INFO(SERVICE_WINDOW, "KEYLOG raw scan=0x{:X} {} -> key={} code=0x{:X} keymods=0x{:X} state-mods=0x{:X}", scancode,
+                key_up ? "up" : "down", res.produced, res.code, res.modifiers, guest_event.key_evt_.modifiers);
+        }
+
+        epoc::window_key_shipper::translated_key tk;
+        tk.produce = res.produced;
+        tk.code = res.code;
+        tk.modifiers = res.modifiers;
+        tk.repeat_code = repeat_code;
+
+        key_shipper.add_new_event(guest_event, tk);
+        key_shipper.start_shipping();
+
+        return res;
+    }
+
+    void window_server::ship_key_by_character(const std::uint32_t scancode, const std::uint32_t code,
+        const std::uint32_t modifiers, const bool key_up) {
+        epoc::event guest_event;
+        guest_event.time = kern->universal_time();
+        guest_event.type = key_up ? epoc::event_code::key_up : epoc::event_code::key_down;
+        guest_event.key_evt_.code = 0;
+        guest_event.key_evt_.scancode = static_cast<std::int32_t>(scancode);
+        guest_event.key_evt_.repeats = 0;
+        guest_event.key_evt_.modifiers = key_up ? key_translator_->modifier_state() : modifiers;
+
+        epoc::window_key_shipper::translated_key tk;
+
+        if (epoc::key_log_enabled()) {
+            LOG_INFO(SERVICE_WINDOW, "KEYLOG char scan=0x{:X} {} code=0x{:X} mods=0x{:X}", scancode, key_up ? "up" : "down", code, modifiers);
+        }
+
+        if (key_up) {
+            tk.repeat_code = key_translator_->is_autorepeatable(code) ? code : 0;
+        } else {
+            tk.produce = true;
+            tk.code = code;
+            tk.modifiers = modifiers | (key_translator_->is_autorepeatable(code) ? epoc::event_modifier_repeatable : 0);
+        }
+
+        key_shipper.add_new_event(guest_event, tk);
+        key_shipper.start_shipping();
+    }
+
+    bool window_server::handle_translated_key_input(const drivers::input_event &input_event) {
+        const bool key_up = (input_event.key_.state_ == drivers::key_state::released);
+        const bool raw_input = (input_event.type_ == drivers::input_event_type::key_raw);
+
+        // A release is paired with its press by the physical key when the frontend knows it: the key code of
+        // the same key can change in between (Shift released first turns '(' back into '9').
+        const std::uint32_t host_key = static_cast<std::uint32_t>(input_event.key_.code_);
+        const std::uint32_t host_id = (!raw_input && input_event.key_.native_) ? (0x80000000U | input_event.key_.native_) : host_key;
+
+        if (epoc::key_log_enabled()) {
+            LOG_INFO(SERVICE_WINDOW, "KEYLOG host {} key=0x{:X} text=0x{:X} native={} mods-before=0x{:X}", key_up ? "up" : "down",
+                host_key, raw_input ? 0 : input_event.key_.text_, raw_input ? 0 : input_event.key_.native_, key_translator_->modifier_state());
+        }
+
+        if (input_event.key_.state_ == drivers::key_state::repeat) {
+            // The window server makes its own repeats.
+            return true;
+        }
+
+        if (key_up) {
+            auto held_ite = held_host_keys_.find(host_id);
+
+            if (held_ite == held_host_keys_.end()) {
+                return false;
+            }
+
+            const held_host_key held = held_ite->second;
+            held_host_keys_.erase(held_ite);
+
+            if (held.by_character) {
+                ship_key_by_character(held.scancode, held.code, held.modifiers, true);
+            } else {
+                ship_raw_translated_key(held.scancode, true, held.code);
+            }
+
+            // Put the modifier keys back the way the host holds them.
+            for (auto undo = held.undo.rbegin(); undo != held.undo.rend(); undo++) {
+                ship_raw_translated_key(undo->first, undo->second, 0);
+            }
+
+            return true;
+        }
+
+        if (held_host_keys_.find(host_id) != held_host_keys_.end()) {
+            // Already down: a host auto-repeat that was not marked as one.
+            return true;
+        }
+
+        held_host_key held;
+
+        auto press_raw = [&](const std::uint32_t scancode) {
+            const epoc::key_translator::result res = ship_raw_translated_key(scancode, false, 0);
+
+            held.scancode = scancode;
+            held.code = (res.produced && (res.modifiers & epoc::event_modifier_repeatable)) ? res.code : 0;
+            held.by_character = false;
+            held_host_keys_[host_id] = held;
+        };
+
+        auto press_by_character = [&](const std::uint32_t scancode, const std::uint32_t code, const std::uint32_t modifiers) {
+            ship_key_by_character(scancode, code, modifiers, false);
+
+            held.scancode = scancode;
+            held.code = code;
+            held.modifiers = modifiers;
+            held.by_character = true;
+            held_host_keys_[host_id] = held;
+        };
+
+        // Type a key the way a person would on the device: first press (or lift) Shift and Chr so that
+        // exactly the needed ones are down, then the key itself. The guest, and its FEP, see the same
+        // key-down/key-up sequence the real keyboard produces.
+        auto press_typed = [&](const std::uint32_t scancode, const std::uint32_t modifiers) {
+            const std::uint32_t now = key_translator_->modifier_state();
+            std::vector<std::pair<std::uint32_t, bool>> undo;
+
+            auto want = [&](const bool need, const std::uint32_t combined, const std::uint32_t left_bit, const std::uint32_t right_bit,
+                            const std::uint32_t left_scancode, const std::uint32_t right_scancode) {
+                const bool have = (now & combined) != 0;
+
+                if (need && !have) {
+                    ship_raw_translated_key(left_scancode, false, 0);
+                    undo.emplace_back(left_scancode, true);
+                } else if (!need && have) {
+                    if (now & left_bit) {
+                        ship_raw_translated_key(left_scancode, true, 0);
+                        undo.emplace_back(left_scancode, false);
+                    }
+
+                    if (now & right_bit) {
+                        ship_raw_translated_key(right_scancode, true, 0);
+                        undo.emplace_back(right_scancode, false);
+                    }
+                }
+            };
+
+            want((modifiers & epoc::event_modifier_shift) != 0, epoc::event_modifier_shift, epoc::event_modifier_left_shift,
+                epoc::event_modifier_right_shift, epoc::std_key_left_shift, epoc::std_key_right_shift);
+            want((modifiers & epoc::event_modifier_func) != 0, epoc::event_modifier_func, epoc::event_modifier_left_func,
+                epoc::event_modifier_right_func, epoc::std_key_left_func, epoc::std_key_right_func);
+
+            press_raw(scancode);
+            held_host_keys_[host_id].undo = std::move(undo);
+        };
+
+        if (raw_input) {
+            // Frontends that already speak scan codes.
+            press_raw(host_key);
+            return true;
+        }
+
+        const std::uint32_t text = input_event.key_.text_;
+        const std::uint32_t held_modifiers = key_translator_->modifier_state();
+        const bool chord = (held_modifiers & (epoc::event_modifier_ctrl | epoc::event_modifier_func)) != 0;
+
+        std::optional<std::uint32_t> mapped = epoc::map_key_to_inputcode(input_mapping.key_input_map, host_key);
+
+        if (!chord && epoc::is_printable_character(text)) {
+            // By character: type it the way this keyboard types it, whatever the host layout is.
+            if (auto key = key_translator_->find_key(text)) {
+                press_typed(key->first, key->second);
+            } else {
+                // Not on this keyboard (ä on the UK layout): deliver the character alone, as the SDK
+                // emulator does for text it cannot place on a key.
+                press_by_character(epoc::std_key_null, text, held_modifiers);
+            }
+
+            return true;
+        }
+
+        if (mapped) {
+            const std::uint32_t scancode = mapped.value() & epoc::BIND_TARGET_SCANCODE_MASK;
+            const std::uint32_t forced = mapped.value() >> epoc::BIND_TARGET_MODIFIER_SHIFT;
+
+            if (forced) {
+                // A desktop key that is a combination on the device (Home = Chr+joystick left).
+                press_typed(scancode, held_modifiers | forced);
+                return true;
+            }
+
+            press_raw(scancode);
+            return true;
+        }
+
+        if (epoc::is_printable_character(text)) {
+            // Chr or Ctrl is down and the host key has no binding: use the key of that character.
+            if (auto scancode = key_translator_->find_scancode(text)) {
+                press_raw(scancode.value());
+                return true;
+            }
+        }
+
+        LOG_TRACE(SERVICE_WINDOW, "Host key 0x{:X} (character 0x{:X}) has no Series 80 key", host_key, text);
+        return false;
     }
 
     void window_server::init_repeatable() {
@@ -2514,9 +2932,8 @@ namespace eka2l1 {
                     repeatable_evt.key_evt_.scancode = scancode;
                     repeatable_evt.key_evt_.repeats = 1;
 
-                    // TODO: Mark the modifiers currently being held in the server,
-                    // and add them to the flags here!
-                    repeatable_evt.key_evt_.modifiers = epoc::event_modifier_repeatable;
+                    // The modifiers of the key event that started repeating (Shift, Ctrl... as they were then).
+                    repeatable_evt.key_evt_.modifiers = repeat_modifiers_ | epoc::event_modifier_repeatable;
 
                     kern->reset_inactivity_time();
 
