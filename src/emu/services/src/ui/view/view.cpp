@@ -307,13 +307,21 @@ namespace eka2l1 {
         std::uint8_t *custom_message_buf = nullptr;
         std::size_t custom_message_size = 0;
 
-        if (kern->get_epoc_version() < epocver::epoc81a) {
-            struct active_view_fundamental_info {
-                ui::view::view_id app_id_;
-                epoc::uid custom_message_id_;
-                std::uint32_t custom_message_size_;
-            };
+        struct active_view_fundamental_info {
+            ui::view::view_id app_id_;
+            epoc::uid custom_message_id_;
+            std::uint32_t custom_message_size_;
+        };
 
+        // Older clients pack the view ID, custom message UID and length into argument 0 and pass the message
+        // as argument 1. Symbian OS 7.0s (Series 80 v2) already sends the later layout: argument 0 is a bare
+        // TPckgC<TVwsViewId>, argument 1 the message UID, argument 2 the message. Reading the packed struct
+        // out of the 8-byte package left the UID and length uninitialised, so the activated view received a
+        // garbage custom message (Opera then never loaded its home page). Tell the two apart by the size.
+        const bool packed_info = (kern->get_epoc_version() < epocver::epoc81a)
+            && (ctx->get_argument_data_size(0) >= sizeof(active_view_fundamental_info));
+
+        if (packed_info) {
             std::optional<active_view_fundamental_info> info = ctx->get_argument_data_from_descriptor<active_view_fundamental_info>(0);
             if (!info) {
                 ctx->complete(epoc::error_argument);
@@ -335,6 +343,9 @@ namespace eka2l1 {
             ctx->complete(epoc::error_argument);
             return;
         }
+
+        LOG_TRACE(SERVICE_UI, "Activate view 0x{:X}/0x{:X}, custom message 0x{:X} ({} bytes{})", id->app_uid, id->view_uid,
+            custom_message_id.value(), custom_message_size, packed_info ? ", packed request" : "");
 
         // TODO: More strict view switching.
         // Currently views between apps can be switched freely, but that will cause chaos
