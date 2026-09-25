@@ -217,6 +217,7 @@ namespace eka2l1::epoc {
                 { 0x100052E9, 0 },
                 { 0x1000A97F, 0 },
                 { 0x101F8ED7, 0 },
+                { 0x101F8E3C, 0 }, // asked by PhoneServer.exe right after it opens the phone
             };
 
             for (const auto &[key, value] : S80_SYSTEM_AGENT_STATES) {

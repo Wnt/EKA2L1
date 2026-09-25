@@ -550,10 +550,15 @@ namespace eka2l1 {
 
                 break;
 
-            case kernel::entity_exit_type::kill:
-                LOG_TRACE(KERNEL, "Thread {} forcefully killed with category: {} and exit code: {} {}", obj_name, exit_category_u8, reason,
-                    exit_description ? (std::string("(") + *exit_description + ")") : "");
+            case kernel::entity_exit_type::kill: {
+                // Name the killer: a server that exits its own main thread and one killed by its
+                // client read the same otherwise.
+                kernel::thread *killer = kern ? kern->crr_thread() : nullptr;
+                LOG_TRACE(KERNEL, "Thread {} forcefully killed with category: {} and exit code: {} {} (by {})", obj_name, exit_category_u8, reason,
+                    exit_description ? (std::string("(") + *exit_description + ")") : "",
+                    killer ? killer->name() : std::string("?"));
                 break;
+            }
 
             case kernel::entity_exit_type::terminate:
             case kernel::entity_exit_type::pending:

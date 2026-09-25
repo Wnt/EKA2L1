@@ -19,6 +19,8 @@
 
 #include <services/etel/line.h>
 #include <services/etel/modmngr.h>
+
+#include <vector>
 #include <services/etel/phone.h>
 
 #include <common/algorithm.h>
@@ -53,16 +55,42 @@ namespace eka2l1::epoc::etel {
 
         // TODO: We need to give it a proper info
         // Give a line first, add it to phone later
-        etel_module_entry line_entry;
-        line_entry.tsy_name_ = module_lowercased;
-
         epoc::etel_line_info line_info;
         line_info.hook_sts_ = epoc::etel_line_hook_sts_off;
         line_info.sts_ = epoc::etel_line_status_idle;
         line_info.last_call_added_.set_length(nullptr, 0);
         line_info.last_call_answering_.set_length(nullptr, 0);
 
-        line_entry.entity_ = std::make_unique<etel_line>(line_info, "Voice1", epoc::etel_line_caps_voice);
+        // Nokia's EKA1 PhoneTsy offers the lines Voice1, Voice2 (alternate line), Data and Fax,
+        // and the Series 80 PhoneServer opens them by those names while it constructs. Later
+        // platforms only ever asked for the one voice line, so they keep it.
+        struct line_spec {
+            const char *name_;
+            std::uint32_t caps_;
+        };
+
+        static constexpr line_spec EKA1_LINES[] = {
+            { "Voice1", epoc::etel_line_caps_voice | epoc::etel_line_caps_dial },
+            { "Voice2", epoc::etel_line_caps_voice | epoc::etel_line_caps_dial },
+            { "Data", epoc::etel_line_caps_data | epoc::etel_line_caps_dial },
+            { "Fax", epoc::etel_line_caps_fax | epoc::etel_line_caps_dial },
+        };
+
+        static constexpr line_spec MODERN_LINES[] = {
+            { "Voice1", epoc::etel_line_caps_voice },
+        };
+
+        const line_spec *specs = kern->is_eka1() ? EKA1_LINES : MODERN_LINES;
+        const std::size_t spec_count = kern->is_eka1() ? (sizeof(EKA1_LINES) / sizeof(line_spec)) : (sizeof(MODERN_LINES) / sizeof(line_spec));
+
+        std::vector<etel_module_entry> line_entries;
+
+        for (std::size_t i = 0; i < spec_count; i++) {
+            etel_module_entry line_entry;
+            line_entry.tsy_name_ = module_lowercased;
+            line_entry.entity_ = std::make_unique<etel_line>(line_info, specs[i].name_, specs[i].caps_);
+            line_entries.push_back(std::move(line_entry));
+        }
 
         etel_module_entry phone_entry;
         phone_entry.tsy_name_ = module_lowercased;
@@ -82,12 +110,21 @@ namespace eka2l1::epoc::etel {
         phone_info.phone_name_.assign(nullptr, phone_name_meme);
 
         auto phone_obj = std::make_unique<etel_phone>(phone_info);
-        phone_obj->lines_.push_back(reinterpret_cast<etel_line *>(line_entry.entity_.get()));
+
+        for (etel_module_entry &line_entry : line_entries) {
+            phone_obj->lines_.push_back(reinterpret_cast<etel_line *>(line_entry.entity_.get()));
+        }
+
+        phone_info.line_count_ = static_cast<std::uint32_t>(line_entries.size());
+        phone_obj->info_.line_count_ = phone_info.line_count_;
 
         phone_entry.entity_ = std::move(phone_obj);
 
         entries_.push_back(std::move(phone_entry));
-        entries_.push_back(std::move(line_entry));
+
+        for (etel_module_entry &line_entry : line_entries) {
+            entries_.push_back(std::move(line_entry));
+        }
 
         tsy_module_info info;
         info.name_ = module_lowercased;
