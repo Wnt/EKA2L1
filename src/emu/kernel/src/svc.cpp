@@ -2380,7 +2380,7 @@ namespace eka2l1::epoc {
     }
 
     BRIDGE_FUNC(std::int32_t, user_svr_rom_root_dir_address) {
-        return kern->get_rom_info()->header.rom_root_dir_list;
+        return kern->get_memory_system()->rom_root_directory(kern->get_rom_info()->header.rom_root_dir_list);
     }
 
     /************************/

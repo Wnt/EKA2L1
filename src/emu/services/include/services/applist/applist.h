@@ -155,7 +155,7 @@ namespace eka2l1 {
      * 
      * \returns True on success.
      */
-    bool read_icon_data_aif(common::ro_stream *stream, fbs_server *serv, std::vector<apa_app_icon> &icon_list, const address rom_addr = 0);
+    bool read_icon_data_aif(common::ro_stream *stream, fbs_server *serv, std::vector<apa_app_icon> &icon_list, const address rom_addr = 0, const bool retain_rom_icons = false);
 
     /**
      * \brief   Read caption data from localised RSC file

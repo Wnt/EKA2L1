@@ -225,7 +225,7 @@ namespace eka2l1 {
             const std::lock_guard<std::mutex> guard(list_access_mut_);
 
             if (!read_icon_data_aif(reinterpret_cast<common::ro_stream *>(&std_rsc_raw), fbsserv, reg.app_icons,
-                                    romaddr)) {
+                                    romaddr, epoc::rom_fbs_enabled(kern->get_epoc_version()))) {
                 return false;
             }
         }
@@ -879,13 +879,6 @@ namespace eka2l1 {
     // file-name dialog walks the app list for its document-type icons, left with that error: the "System /
     // Unknown error" note instead of the dialog.
     void applist_server::get_app_icon_by_uid(service::ipc_context &ctx) {
-        // Host icon handles belong to EKA2L1HostFbs, not the guest's ROM FBS.
-        // Optional until an ARM RFbsSession bridge can publish these bitmaps.
-        if (epoc::rom_fbs_enabled(kern->get_epoc_version())) {
-            ctx.complete(epoc::error_not_found);
-            return;
-        }
-
         std::optional<epoc::uid> app_uid = ctx.get_argument_value<epoc::uid>(0);
         std::optional<std::int32_t> request = ctx.get_argument_value<std::int32_t>(1);
 
@@ -905,6 +898,12 @@ namespace eka2l1 {
         const std::size_t pair = applist_icon_pair_for_int_request(reg->app_icons.size() / 2, request.value(),
             [&](const std::int32_t side) { return pick_icon_pair_by_size(*reg, eka2l1::vec2(side, side)); });
 
+        if (epoc::rom_fbs_enabled(kern->get_epoc_version())
+            && (!reg->app_icons[pair * 2].bmp_rom_addr_ || !reg->app_icons[pair * 2 + 1].bmp_rom_addr_)) {
+            // Disk-format icons still need an ARM FBS IPC bridge.
+            ctx.complete(epoc::error_not_found);
+            return;
+        }
         const app_icon_handles handle_result = icon_pair_handles(*reg, pair);
         LOG_TRACE(SERVICE_APPLIST, "AppIconByUid 0x{:X} asked {}: pair {} of {}", app_uid.value(), request.value(), pair,
             reg->app_icons.size() / 2);
@@ -914,13 +913,6 @@ namespace eka2l1 {
     }
 
     void applist_server::get_app_icon(service::ipc_context &ctx) {
-        // Host icon handles belong to EKA2L1HostFbs, not the guest's ROM FBS.
-        // Optional until an ARM RFbsSession bridge can publish these bitmaps.
-        if (epoc::rom_fbs_enabled(kern->get_epoc_version())) {
-            ctx.complete(epoc::error_not_found);
-            return;
-        }
-
         std::optional<epoc::uid> app_uid = ctx.get_argument_value<epoc::uid>(0);
         std::optional<std::int32_t> icon_size_width = std::nullopt;
         std::optional<std::int32_t> icon_size_height = std::nullopt;
@@ -965,6 +957,12 @@ namespace eka2l1 {
                 chosen ? chosen->first->header_.size_pixels.y : -1);
         }
 
+        if (epoc::rom_fbs_enabled(kern->get_epoc_version())
+            && (!reg->app_icons[pair * 2].bmp_rom_addr_ || !reg->app_icons[pair * 2 + 1].bmp_rom_addr_)) {
+            // Disk-format icons still need an ARM FBS IPC bridge.
+            ctx.complete(epoc::error_not_found);
+            return;
+        }
         const app_icon_handles handle_result = icon_pair_handles(*reg, pair);
 
         if (legacy_level() == APA_LEGACY_LEVEL_OLD) {
@@ -978,13 +976,6 @@ namespace eka2l1 {
     }
 
     void applist_server::get_app_icon_sizes(service::ipc_context &ctx) {
-        // Host icon handles belong to EKA2L1HostFbs, not the guest's ROM FBS.
-        // Optional until an ARM RFbsSession bridge can publish these bitmaps.
-        if (epoc::rom_fbs_enabled(kern->get_epoc_version())) {
-            ctx.complete(epoc::error_not_found);
-            return;
-        }
-
         std::optional<epoc::uid> app_uid = ctx.get_argument_value<epoc::uid>(0);
 
         if (!app_uid) {

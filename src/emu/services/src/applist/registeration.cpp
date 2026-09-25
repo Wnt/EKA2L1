@@ -644,7 +644,7 @@ namespace eka2l1 {
         }
     }
 
-    bool read_icon_data_aif(common::ro_stream *stream, fbs_server *serv, std::vector<apa_app_icon> &icon_list, const address rom_addr) {
+    bool read_icon_data_aif(common::ro_stream *stream, fbs_server *serv, std::vector<apa_app_icon> &icon_list, const address rom_addr, const bool retain_rom_icons) {
         // Seek to header pos, over the UIDs
         epoc::uid_type uids;
         if (stream->read(&uids, sizeof(epoc::uid_type)) != sizeof(epoc::uid_type)) {
@@ -791,6 +791,7 @@ namespace eka2l1 {
                 stream->seek(4 - (cur_pos % 4), common::seek_where::cur);
             }
 
+            const std::size_t mbm_offset = stream->tell();
             std::vector<std::uint8_t> mbm_data;
             mbm_data.resize(stream->size() - stream->tell());
 
@@ -801,12 +802,21 @@ namespace eka2l1 {
             common::ro_buf_stream mbm_data_stream(mbm_data.data(), mbm_data.size());
 
             loader::mbm_file icon_list_file(reinterpret_cast<common::ro_stream *>(&mbm_data_stream));
-            icon_list_file.do_read_headers();
+            if (!icon_list_file.do_read_headers()) return false;
 
             // Create FBS bitmap instances
             icon_list.resize(icon_list_file.trailer.count);
 
             for (std::uint32_t i = 0; i < icon_list_file.trailer.count; i++) {
+                if (retain_rom_icons && rom_addr && icon_list_file.is_rom_version) {
+                    // A ROM bitmap's address is its guest handle. Retain that address,
+                    // never a handle from the private host FBS, in full ROM mode.
+                    icon_list[i].bmp_ = nullptr;
+                    icon_list[i].bmp_rom_addr_ = rom_addr + static_cast<address>(mbm_offset)
+                        + icon_list_file.trailer.sbm_offsets[i];
+                    icon_list[i].number_ = i / 2;
+                    continue;
+                }
                 fbs_bitmap_data_info info;
                 info.comp_ = static_cast<epoc::bitmap_file_compression>(icon_list_file.sbm_headers[i].compression);
                 info.data_ = mbm_data.data() + icon_list_file.bitmap_data_offset(i);
