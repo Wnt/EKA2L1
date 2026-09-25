@@ -292,11 +292,25 @@ namespace eka2l1 {
 
     static void create_stub_servers(system *sys) {
         const char *env = std::getenv("EKA2L1_STUB_SERVERS");
-        if (!env) {
+        std::string list = env ? env : "";
+
+        // Series 80: the ROM's PhoneServer.exe ("Phone Server", the call-handling server the Telephone
+        // app and EikSrvUi connect to) cannot run without a cellular modem: it exits -5 right after it
+        // opens the TSY's custom API, and the Telephone app then panics "PhoneServer start 1". A
+        // phone-less stand-in is enough for everything that talks to it: Telephone sends op 300 once
+        // (synchronous) while it builds its first screen, EikSrvUi ops 0 and 300. The stub answers
+        // KErrNone and leaves notifications pending, as for a phone that never rings.
+        // EKA2L1_NO_HLE_PHONESERVER=1 leaves the name to the ROM's server.
+        kernel_system *kern = sys->get_kernel_system();
+        if (kern->is_eka1() && sys->is_s80_device_active() && (std::getenv("EKA2L1_NO_HLE_PHONESERVER") == nullptr)
+            && (list.find("Phone Server") == std::string::npos)) {
+            list += list.empty() ? "Phone Server" : ";Phone Server";
+        }
+
+        if (list.empty()) {
             return;
         }
 
-        const std::string list = env;
         std::size_t start = 0;
         while (start < list.size()) {
             std::size_t end = list.find(';', start);
@@ -312,7 +326,7 @@ namespace eka2l1 {
 
             std::unique_ptr<service::server> svr = std::make_unique<stub_server>(sys, name);
             sys->get_kernel_system()->add_custom_server(svr);
-            LOG_WARN(KERNEL, "Stub server {} registered (EKA2L1_STUB_SERVERS)", name);
+            LOG_WARN(KERNEL, "Stub server {} registered", name);
         }
     }
 }
@@ -527,6 +541,12 @@ namespace eka2l1 {
                 // started only when the data dir carries it.
                 list = "C:\\System\\Programs\\SysState.exe;Z:\\System\\Programs\\SecurityServer.exe";
                 optional_entries = true;
+            } else if (kern->is_eka1() && sys->is_s80_device_active()) {
+                // With the HLE Eikon server nothing else starts SecurityServer (the PIN/security-code
+                // server Starter launches on the device), and the Telephone app needs it: its
+                // connection fails, it shows an error note and closes, leaving a black screen. The
+                // server itself only needs ETel, which the HLE provides.
+                list = "Z:\\System\\Programs\\SecurityServer.exe";
             }
 
             std::size_t start = 0;
