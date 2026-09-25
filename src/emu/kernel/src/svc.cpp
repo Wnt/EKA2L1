@@ -1246,7 +1246,7 @@ namespace eka2l1::epoc {
         config::state *config = kern->get_config();
 
         if (config && config->log_ipc) {
-            LOG_TRACE(KERNEL, "New session connected to {} with handle {}", server->name(), session_and_handle.first);
+            LOG_TRACE(KERNEL, "New session connected to {} with handle {} by {}", server->name(), session_and_handle.first, kern->crr_thread() ? kern->crr_thread()->name() : std::string("?"));
         }
 
         session_and_handle.second->set_associated_handle(session_and_handle.first);
@@ -1353,7 +1353,7 @@ namespace eka2l1::epoc {
         }
 
         if (kern->get_config()->log_ipc) {
-            LOG_TRACE(KERNEL, "Sending {} sync to {}", ord, ss->get_server()->name());
+            LOG_TRACE(KERNEL, "Sending {} sync to {} from {}", ord, ss->get_server()->name(), kern->crr_thread() ? kern->crr_thread()->name() : std::string("?"));
         }
 
         const std::string server_name = ss->get_server()->name();

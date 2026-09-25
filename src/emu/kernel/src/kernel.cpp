@@ -20,6 +20,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <queue>
 #include <thread>
 
@@ -99,7 +101,13 @@ namespace eka2l1 {
         reset();
     }
 
+    // The kernel the dump thread reads; cleared when that kernel is destroyed.
+    static std::atomic<kernel_system *> thread_dump_kernel{ nullptr };
+
     kernel_system::~kernel_system() {
+        kernel_system *self = this;
+        thread_dump_kernel.compare_exchange_strong(self, nullptr);
+
         wipeout();
     }
 
@@ -181,10 +189,127 @@ namespace eka2l1 {
         wiping_ = false;
     }
 
+    // Debug aid, off unless EKA2L1_THREAD_DUMP_SECS=<n> is set: every n seconds, log every guest thread's
+    // state, wait object, registers and the ROM addresses found on its stack, each named by the ROM image
+    // that contains it. It answers "what is this silent guest thread waiting for" without a debugger.
+    static bool thread_dump_rom_entry_of(const loader::rom_dir &dir, const std::u16string &path_so_far,
+        const std::uint32_t addr, std::u16string &result, std::uint32_t &entry_base) {
+        static constexpr std::uint8_t FILE_ATTRIB_DIR = 0x10;
+
+        for (const auto &entry : dir.entries) {
+            if (!(entry.attrib & FILE_ATTRIB_DIR) && (entry.address_lin <= addr) && (addr - entry.address_lin < entry.size)) {
+                result = path_so_far + entry.name;
+                entry_base = entry.address_lin;
+                return true;
+            }
+        }
+
+        for (const auto &subdir : dir.subdirs) {
+            if (thread_dump_rom_entry_of(subdir, path_so_far + subdir.name + u"\\", addr, result, entry_base)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    static std::string thread_dump_name_addr(kernel_system *kern, const std::uint32_t addr) {
+        loader::rom *rom_info = kern->get_rom_info();
+
+        if (rom_info && kern->is_address_in_rom(addr)) {
+            for (const auto &root : rom_info->root.root_dirs) {
+                std::u16string file;
+                std::uint32_t base = 0;
+
+                if (thread_dump_rom_entry_of(root.dir, u"", addr, file, base)) {
+                    return fmt::format("{}+0x{:x}@{:x}", common::ucs2_to_utf8(eka2l1::filename(file)), addr - base, addr);
+                }
+            }
+        }
+
+        return fmt::format("0x{:x}", addr);
+    }
+
+    static void dump_guest_threads(kernel_system *kern) {
+        kern->lock();
+
+        LOG_INFO(KERNEL, "TDUMP begin: {} threads", kern->get_thread_list().size());
+
+        for (auto &obj : kern->get_thread_list()) {
+            kernel::thread *thr = reinterpret_cast<kernel::thread *>(obj.get());
+
+            if (!thr || (thr->current_state() == kernel::thread_state::stop)) {
+                // A dead thread's process may be gone already: do not touch it.
+                continue;
+            }
+
+            kernel::process *pr = thr->owning_process();
+            arm::core::thread_context &ctx = thr->get_thread_context();
+            const std::uint32_t sp = ctx.cpu_registers[13];
+
+            std::string wait_desc = "-";
+
+            if (thr->wait_obj) {
+                wait_desc = fmt::format("{}:{}", static_cast<int>(thr->wait_obj->get_object_type()), thr->wait_obj->name());
+            }
+
+            // ROM code addresses on the top of the stack: return addresses of the callers.
+            std::string stack_desc;
+            std::size_t found = 0;
+
+            for (std::uint32_t i = 0; pr && (i < 256) && (found < 12); i++) {
+                std::uint32_t *word = reinterpret_cast<std::uint32_t *>(pr->get_ptr_on_addr_space(sp + i * 4));
+
+                if (!word) {
+                    break;
+                }
+
+                if (kern->is_address_in_rom(*word)) {
+                    stack_desc += fmt::format(" [sp+0x{:x}]={}", i * 4, thread_dump_name_addr(kern, *word));
+                    found++;
+                }
+            }
+
+            LOG_INFO(KERNEL, "TDUMP {} / {} state={} wait={} reqcnt={} pc={} lr={} sp=0x{:x} r0=0x{:x} r1=0x{:x} r2=0x{:x} r3=0x{:x} r4=0x{:x} |{}",
+                pr ? pr->name() : std::string("?"), thr->name(), static_cast<int>(thr->current_state()), wait_desc,
+                thr->request_count(), thread_dump_name_addr(kern, ctx.cpu_registers[15]),
+                thread_dump_name_addr(kern, ctx.cpu_registers[14]), sp, ctx.cpu_registers[0], ctx.cpu_registers[1],
+                ctx.cpu_registers[2], ctx.cpu_registers[3], ctx.cpu_registers[4], stack_desc);
+        }
+
+        LOG_INFO(KERNEL, "TDUMP end");
+        kern->unlock();
+    }
+
     void kernel_system::reset() {
         wipeout();
 
         thr_sch_ = std::make_unique<kernel::thread_scheduler>(this, timing_, cpu_);
+
+        if (const char *dump_secs = std::getenv("EKA2L1_THREAD_DUMP_SECS")) {
+            // A host thread, not an ntimer event: system::reset() resets the timer after the kernel, which
+            // drops every event scheduled here. The kernel object lives until the process exits.
+            static bool thread_dump_started = false;
+            thread_dump_kernel = this;
+
+            if (!thread_dump_started) {
+                thread_dump_started = true;
+                const int period_s = std::max(1, std::atoi(dump_secs));
+
+                std::thread([period_s]() {
+                    while (true) {
+                        std::this_thread::sleep_for(std::chrono::seconds(period_s));
+
+                        kernel_system *kern = thread_dump_kernel.load();
+                        if (!kern) {
+                            break;
+                        }
+
+                        dump_guest_threads(kern);
+                    }
+                }).detach();
+            }
+        }
 
         // Instantiate btrace
         btrace_inst_ = std::make_unique<kernel::btrace>(this, io_);
