@@ -1260,7 +1260,8 @@ namespace eka2l1::hle {
         epoc_import_func func = res->second;
 
         if (kern_->get_config()->log_svc) {
-            LOG_TRACE(KERNEL, "Calling SVC 0x{:x} {}", svcnum, func.name);
+            kernel::thread *caller = kern_->crr_thread();
+            LOG_TRACE(KERNEL, "Calling SVC 0x{:x} {} ({})", svcnum, func.name, caller ? caller->name() : std::string("?"));
         }
 
         func.func(kern_, kern_->crr_process(), kern_->get_cpu());
