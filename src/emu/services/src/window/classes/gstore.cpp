@@ -17,6 +17,10 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <cmath>
+#include <cstdlib>
+#include <common/log.h>
+#include <common/cvt.h>
 #include <services/window/classes/gstore.h>
 #include <services/window/util.h>
 #include <services/window/bitmap_cache.h>
@@ -356,7 +360,11 @@ namespace eka2l1::epoc {
         float scale_to_pass = 1.0f;
 
         if (text_font->of_info.adapter->vectorizable()) {
-            scaled_font_size = static_cast<std::int16_t>(scaled_font_size * scale_factor_);
+            // Rasterise at the size FBS gave the guest its glyphs at (the font's metric identifier: the scalable
+            // adapters' pixel size), not at the line height (max_height, em + line gap): at that size every
+            // stored or redrawn run in a TrueType face (Documents' SwissA) came out larger and wider than the guest
+            // laid it out, and the caret the guest placed after "hello" sat on the "o".
+            scaled_font_size = static_cast<std::int16_t>(std::lround(static_cast<float>(text_font->of_info.metric_identifier) * scale_factor_));
             metric_identifier = scaled_font_size;       // Vectorizable font metric identifier is font size
 
             if ((text_font->atlas.atlas_handle_ != 0) && (scaled_font_size != text_font->atlas.get_char_size())) {
@@ -377,8 +385,32 @@ namespace eka2l1::epoc {
         scale_rectangle(scaled_text_box, scale_factor_);
 
         eka2l1::vec2 pen_span{ 0, 0 };
+
+        // A vectorizable font is rasterised again at the display scale: step the pen by the advances the guest
+        // measured with (scaled), so the drawn run ends where the guest's layout - and its caret - puts it.
+        const float client_advance_scale = text_font->of_info.adapter->vectorizable() ? scale_factor_ : 0.0f;
         text_font->atlas.draw_text(cmd.string_, scaled_text_box, static_cast<epoc::text_alignment>(cmd.alignment_),
-            driver_, builder_, { scale_to_pass, scale_to_pass }, premultiplied_target_, &pen_span);
+            driver_, builder_, { scale_to_pass, scale_to_pass }, premultiplied_target_, &pen_span, client_advance_scale);
+
+        // Diagnostic (env EKA2L1_TEXT_TRACE): each drawn run with its font and where the pen ended, to set against
+        // the caret the guest asks for (EKA2L1_WS_SEG_TRACE logs SetTextCursor).
+        static const bool text_trace = std::getenv("EKA2L1_TEXT_TRACE") != nullptr;
+        if (text_trace) {
+            int known = 0;
+            int client_sum = 0;
+            const std::u16string str(cmd.string_);
+            for (const char16_t c : str) {
+                int adv = 0;
+                if (text_font->atlas.get_client_advance(c, adv)) {
+                    known++;
+                    client_sum += adv;
+                }
+            }
+            LOG_TRACE(SERVICE_WINDOW, "DrawText font '{}' h{} vec {} scale {} box ({},{}) \"{}\" pen {}..{} (client advances {}/{} sum {})",
+                common::ucs2_to_utf8(text_font->of_info.face_attrib.fam_name.to_std_string(nullptr)), text_font->of_info.metrics.design_height,
+                text_font->of_info.adapter->vectorizable(), scale_factor_, cmd.text_box_.top.x, cmd.text_box_.top.y,
+                common::ucs2_to_utf8(str), pen_span.x, pen_span.y, known, str.size(), client_sum);
+        }
 
         if ((cmd.text_flags_ & (GDI_STORE_COMMAND_TEXT_UNDERLINE | GDI_STORE_COMMAND_TEXT_STRIKETHROUGH)) && (pen_span.y > pen_span.x)) {
             // CFbsBitGc: both lines are Max(HeightInPixels / 10, 1) thick and span the text's advance; the

@@ -21,6 +21,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <cstdlib>
 #include <services/fbs/fbs.h>
 #include <services/fbs/linked_font_config.h>
 
@@ -702,6 +703,15 @@ namespace eka2l1 {
             font->guest_font_offset = serv->host_ptr_to_guest_shared_offset(bmpfont);
         }
 
+        // Diagnostic (env EKA2L1_FONT_TRACE): what was asked for and what was handed out.
+        static const bool font_trace = std::getenv("EKA2L1_FONT_TRACE") != nullptr;
+        if (font_trace) {
+            LOG_TRACE(SERVICE_FBS, "NearestFont op 0x{:X} from {}: '{}' h{} (arg {}) style 0x{:X} -> font 0x{:X} '{}' design h{} vec {}",
+                ctx->msg->function, ctx->msg->own_thr->name(), common::ucs2_to_utf8(spec.tf.name.to_std_string(nullptr)), spec.height,
+                spec_arg->height, spec.style.flags, font->id, common::ucs2_to_utf8(font->of_info.face_attrib.name.to_std_string(nullptr)),
+                font->of_info.metrics.design_height, font->of_info.adapter->vectorizable());
+        }
+
         write_font_handle(ctx, font, 1);
     }
 
@@ -842,6 +852,18 @@ namespace eka2l1 {
             // On lower version, it expect us to return nullptr, so use 0 here is for the best.
             ctx->complete(0);
             return;
+        }
+
+        static const bool font_trace = std::getenv("EKA2L1_FONT_TRACE") != nullptr;
+        if (font_trace) {
+            LOG_TRACE(SERVICE_FBS, "Rasterize font 0x{:X} (design h{}) code 0x{:X} from {}: adv {} w {} bx {}", font->id,
+                font->of_info.metrics.design_height, codepoint, ctx->msg->own_thr->name(), char_metric.horizontal_advance,
+                char_metric.width, char_metric.horizontal_bearing_x);
+        }
+
+        // The guest lays text out with this advance; the drawing side steps its pen by it too (font_atlas).
+        if (!(codepoint & 0x80000000)) {
+            const_cast<fbsfont *>(font)->atlas.set_client_advance(codepoint, char_metric.horizontal_advance);
         }
 
         // Add it to session cache
