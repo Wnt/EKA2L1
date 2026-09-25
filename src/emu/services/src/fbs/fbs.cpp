@@ -21,12 +21,14 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
 #include <kernel/chunk.h>
 #include <kernel/kernel.h>
 #include <kernel/libmanager.h>
 #include <system/epoc.h>
 
 #include <services/fbs/fbs.h>
+#include <services/fbs/font_store.h>
 #include <services/window/common.h>
 #include <services/fs/std.h>
 
@@ -143,15 +145,32 @@ namespace eka2l1 {
 
         case fbs_font_height_in_twips:
         case fbs_font_height_in_pixels: {
-            // EKA1 CFbsTypefaceStore::FontHeightIn{Twips,Pixels}(aTypefaceIndex, aHeightIndex): the classic
-            // point-size ladder of the Symbian font store. Never completing it parks the caller forever.
-            static constexpr std::int32_t POINT_LADDER[] = { 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36 };
-            static constexpr std::int32_t LADDER_LAST = static_cast<std::int32_t>(sizeof(POINT_LADDER) / sizeof(POINT_LADDER[0])) - 1;
-            std::int32_t height_idx = ctx->get_argument_value<std::int32_t>(1).value_or(0);
-            height_idx = (height_idx < 0) ? 0 : ((height_idx > LADDER_LAST) ? LADDER_LAST : height_idx);
-            const std::int32_t twips = POINT_LADDER[height_idx] * 20;
-            // The device's twips a pixel: 15 (96 dpi) for S60 v1/v2 as before, 9.78 for the Series 80 panel.
-            const std::int32_t pixels = static_cast<std::int32_t>(twips / epoc::get_approximate_pixel_to_twips_mul(ctx->sys->get_symbian_version_use()));
+            // CFontStore::FontHeightIn{Twips,Pixels}(aTypefaceIndex, aHeightIndex). A bitmap typeface answers
+            // with the aHeightIndex-th of its distinct bitmap heights (the largest past the end); an Open Font
+            // typeface with the standard size aHeightIndex steps above its nearest one. Never completing it parks
+            // the caller forever.
+            const epocver ver = ctx->sys->get_symbian_version_use();
+            const std::int32_t typeface_idx = ctx->get_argument_value<std::int32_t>(0).value_or(-1);
+            const std::int32_t height_idx = ctx->get_argument_value<std::int32_t>(1).value_or(-1);
+
+            epoc::font_store &store = server<fbs_server>()->persistent_font_store;
+            const epoc::typeface_support *support = (typeface_idx >= 0) ? store.get_typeface_support(static_cast<std::uint32_t>(typeface_idx)) : nullptr;
+
+            std::int32_t twips = 0;
+            std::int32_t pixels = 0;
+
+            if (support && (height_idx >= 0)) {
+                if (const std::vector<std::int32_t> *heights = store.get_typeface_bitmap_heights(static_cast<std::uint32_t>(typeface_idx))) {
+                    pixels = (*heights)[std::min<std::size_t>(static_cast<std::size_t>(height_idx), heights->size() - 1)];
+                    twips = epoc::pixels_to_twips(ver, pixels);
+                } else {
+                    const std::vector<std::int32_t> &sizes = epoc::font_store::open_font_standard_sizes_in_twips();
+                    const std::size_t nearest = epoc::font_store::open_font_nearest_size_index(epoc::pixels_to_twips(ver, support->min_height_in_twips_));
+                    twips = sizes[std::min<std::size_t>(nearest + static_cast<std::size_t>(height_idx), sizes.size() - 1)];
+                    pixels = epoc::twips_to_pixels(ver, twips);
+                }
+            }
+
             ctx->complete((ctx->msg->function == fbs_font_height_in_twips) ? twips : pixels);
             break;
         }

@@ -106,6 +106,30 @@ namespace eka2l1::epoc {
     // (inverted for NOTPEN). At most 2 passes.
     std::uint32_t gdi_expand_draw_mode(const std::uint32_t mode, eka2l1::vec4 &color, gdi_draw_mode_pass *passes);
 
+    /**
+     * @brief CFbsBitGc::DrawRect split into pixels that are each painted once.
+     *
+     * With a pen, the brush fills only the part of the rectangle the pen leaves (`fill`, when `has_fill`),
+     * and the pen is four edges that do not overlap: a band `pen_size / 2` outside the rectangle's edge and
+     * the rest inside it. Painting every pixel once matters in the logical draw modes (NOTSCREEN, XOR),
+     * where a pixel painted twice flips back.
+     */
+    struct gdi_rect_outline {
+        eka2l1::rect fill;
+        bool has_fill = false;
+        eka2l1::rect edges[4];
+        std::size_t edge_count = 0;
+    };
+
+    gdi_rect_outline gdi_split_rect_outline(const eka2l1::rect &area, const eka2l1::vec2 &pen_size);
+
+    /**
+     * @brief The pixels CFbsBitGc::DrawLine paints for an axis-aligned line: from the start point up to but
+     *        not including the end point, whichever way it runs, with the pen of width w centred on it
+     *        (w / 2 before the line). A line that starts and ends on the same point is one pen dot.
+     */
+    eka2l1::rect gdi_axis_line_rect(const eka2l1::vec2 &start, const eka2l1::vec2 &end, const eka2l1::vec2 &pen_size);
+
     struct gdi_store_command_draw_rect_data {
         eka2l1::vec4 color_;
         eka2l1::rect rect_;

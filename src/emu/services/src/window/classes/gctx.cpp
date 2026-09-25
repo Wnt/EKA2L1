@@ -38,6 +38,10 @@
 
 #include <utils/err.h>
 
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+
 namespace eka2l1::epoc {
     static void *decide_bitmap_pointer_to_pass(wsbitmap *server_bmp, std::uint8_t &affected_flags, const bool is_mask) {
         if (server_bmp->parent_) {
@@ -777,31 +781,55 @@ namespace eka2l1::epoc {
 
         drivers::pen_style pen_style;
         eka2l1::vec4 pen_color;
-        epoc::gdi_store_command gdi_cmd;
 
-        // CFbsBitGc::DrawRect fills with the brush first and outlines with the pen on top.
-        fill_with_brush(area);
+        const bool has_pen = get_pen_color_and_style(pen_color, pen_style) && (pen_size.x > 0) && (pen_size.y > 0);
 
-        if (get_pen_color_and_style(pen_color, pen_style)) {
-            eka2l1::vec2 point_list[5] =  {
-                area.top,
-                area.top + eka2l1::vec2(area.size.x, 0),
-                area.top + area.size,
-                area.top + eka2l1::vec2(0, area.size.y),
-                area.top
-            };
+        // CFbsBitGc::DrawRect: the brush fills the part of the rectangle the pen does not cover, and the
+        // pen outline is four edges that never overlap. Every pixel is therefore painted exactly once,
+        // which matters in the logical draw modes: Series 80 Sheet draws and erases its cell cursor as
+        // 3-pixel bars in EDrawModeNOTSCREEN (brush + 1-pixel pen). Fill-then-outline inverted the edge
+        // pixels twice, leaving two thin lines instead of a solid bar, and the closed outline polyline
+        // ran one pixel past the right and bottom edges.
+        const epoc::gdi_rect_outline outline = epoc::gdi_split_rect_outline(area, has_pen ? pen_size : eka2l1::vec2(0, 0));
 
-            epoc::gdi_store_command_draw_polygon_data &cmd_data = gdi_cmd.get_data_struct<epoc::gdi_store_command_draw_polygon_data>();
+        if (outline.has_fill) {
+            fill_with_brush(outline.fill);
+        }
 
-            gdi_cmd.opcode_ = epoc::gdi_store_command_draw_polygon;
-            cmd_data.point_count_ = 5;
-            cmd_data.color_ = pen_color;
-            cmd_data.style_ = pen_style;
-            cmd_data.points_ = reinterpret_cast<eka2l1::point*>(gdi_cmd.allocate_dynamic_data(5 * sizeof(eka2l1::point)));
+        if (has_pen) {
+            if (pen_style == drivers::pen_style_solid) {
+                for (std::size_t i = 0; i < outline.edge_count; i++) {
+                    epoc::gdi_store_command edge_cmd;
+                    epoc::gdi_store_command_draw_rect_data &edge_data = edge_cmd.get_data_struct<epoc::gdi_store_command_draw_rect_data>();
 
-            std::memcpy(cmd_data.points_, point_list, 5 * sizeof(eka2l1::point));
+                    edge_data.rect_ = outline.edges[i];
+                    edge_data.color_ = pen_color;
+                    edge_cmd.opcode_ = epoc::gdi_store_command_draw_rect;
 
-            add_moded_draw_command(gdi_cmd);
+                    add_moded_draw_command(edge_cmd);
+                }
+            } else {
+                epoc::gdi_store_command gdi_cmd;
+                eka2l1::vec2 point_list[5] =  {
+                    area.top,
+                    area.top + eka2l1::vec2(area.size.x - 1, 0),
+                    area.top + area.size - eka2l1::vec2(1, 1),
+                    area.top + eka2l1::vec2(0, area.size.y - 1),
+                    area.top
+                };
+
+                epoc::gdi_store_command_draw_polygon_data &cmd_data = gdi_cmd.get_data_struct<epoc::gdi_store_command_draw_polygon_data>();
+
+                gdi_cmd.opcode_ = epoc::gdi_store_command_draw_polygon;
+                cmd_data.point_count_ = 5;
+                cmd_data.color_ = pen_color;
+                cmd_data.style_ = pen_style;
+                cmd_data.points_ = reinterpret_cast<eka2l1::point*>(gdi_cmd.allocate_dynamic_data(5 * sizeof(eka2l1::point)));
+
+                std::memcpy(cmd_data.points_, point_list, 5 * sizeof(eka2l1::point));
+
+                add_moded_draw_command(gdi_cmd);
+            }
         }
 
         context.complete(epoc::error_none);
@@ -922,6 +950,17 @@ namespace eka2l1::epoc {
         }
 
         text_font = font_object;
+        {
+            static const bool uf_trace = (std::getenv("EKA2L1_WS_GC_TRACE") != nullptr);
+            if (uf_trace) {
+                std::fprintf(stderr, "UFT win=%08x handle=%u face='%s' idx=%u design=%d ascent=%d descent=%d metric=0x%x\n",
+                    attached_window ? attached_window->id : 0, font_handle,
+                    common::ucs2_to_utf8(font_object->of_info.face_attrib.name.to_std_string(nullptr)).c_str(),
+                    static_cast<unsigned>(font_object->of_info.idx), font_object->of_info.metrics.design_height,
+                    font_object->of_info.metrics.ascent, font_object->of_info.metrics.descent,
+                    font_object->of_info.metric_identifier);
+            }
+        }
         context.complete(epoc::error_none);
     }
 
@@ -1284,6 +1323,26 @@ namespace eka2l1::epoc {
 
         if (need_to_set_flushed) {
             flushed = false;
+        }
+
+        {
+            // Diagnostic: EKA2L1_WS_GC_TRACE=1 logs every GC command with its raw payload to stderr
+            // (opcode numbers are the client's table: u139 for Series 80).
+            static const bool gc_trace = (std::getenv("EKA2L1_WS_GC_TRACE") != nullptr);
+            if (gc_trace) {
+                std::string hex;
+                const std::uint8_t *b = reinterpret_cast<const std::uint8_t *>(cmd.data_ptr);
+                const int n = std::min<int>(cmd.header.cmd_len, 40);
+                char tmp[4];
+                for (int i = 0; i < n && b; i++) {
+                    std::snprintf(tmp, sizeof(tmp), "%02x", b[i]);
+                    hex += tmp;
+                    if ((i & 3) == 3) hex += ' ';
+                }
+                std::fprintf(stderr, "GCT win=%08x dm=%d gc=%p op=%u len=%u %s\n",
+                    attached_window ? attached_window->id : 0, attached_window ? static_cast<int>(attached_window->display_mode()) : -1, static_cast<void *>(this),
+                    cmd.header.op, cmd.header.cmd_len, hex.c_str());
+            }
         }
 
         handler(this, ctx, cmd);
