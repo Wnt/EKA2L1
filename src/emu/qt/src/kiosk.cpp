@@ -1,3 +1,5 @@
+#include <services/window/rom_bridge.h>
+#include <common/pystr.h>
 /*
  * Copyright (c) 2026 EKA2L1 Team.
  *
@@ -526,6 +528,36 @@ namespace eka2l1::desktop {
         }
     }
 
+    static void collect_rom_groups(kernel_system *kern, rom_window_bridge *bridge,
+        const bool include_plain_groups, std::vector<running_app> &apps) {
+        int ordinal = 0;
+        for (const auto &row : bridge->snapshot.groups) {
+            const int position = ordinal++;
+            auto *owner = kern->get_by_id<kernel::thread>(row.thread);
+            auto *pr = owner ? owner->owning_process() : nullptr;
+            if (!pr || pr->get_exit_type() != kernel::entity_exit_type::pending) continue;
+            std::u16string name(row.name, row.name + row.name_length);
+            const auto parts = common::pystr16(name).split(u'\0');
+            running_app app;
+            if (parts.size() >= 3) {
+                app.uid = parts[1].as_int<std::uint32_t>(0, 16);
+                app.name = common::ucs2_to_utf8(parts[2].std_str());
+            }
+            if (!app.uid) {
+                if (!include_plain_groups) continue;
+                app.uid = pr->get_uid();
+                std::replace(name.begin(), name.end(), u'\0', u'|');
+                app.name = common::ucs2_to_utf8(name);
+                app.is_app = false;
+            }
+            app.window_group = row.id;
+            app.ordinal = position;
+            app.focus = row.id == bridge->snapshot.focus;
+            app.process = pr->unique_id();
+            apps.push_back(std::move(app));
+        }
+    }
+
     std::vector<running_app> list_running_apps(emulator &state, const bool include_plain_groups) {
         std::vector<running_app> apps;
         kernel_system *kern = state.symsys ? state.symsys->get_kernel_system() : nullptr;
@@ -537,7 +569,9 @@ namespace eka2l1::desktop {
         const std::lock_guard<kernel_system> guard(*kern);
         epoc::screen *scr = get_current_active_screen(state.symsys.get(), 0);
 
-        if (scr) {
+        if (auto *bridge = get_rom_window_bridge(kern)) {
+            collect_rom_groups(kern, bridge, include_plain_groups, apps);
+        } else if (scr) {
             collect_groups(scr, include_plain_groups, apps);
         }
 
@@ -565,7 +599,16 @@ namespace eka2l1::desktop {
             }
 
             std::vector<running_app> apps;
-            collect_groups(scr, false, apps);
+            auto *bridge = get_rom_window_bridge(kern);
+            if (bridge) {
+                if (!bridge->snapshot.ready) {
+                    *err = "ROM window bridge not ready (install the current SysState.exe)";
+                    return switch_result::failed;
+                }
+                collect_rom_groups(kern, bridge, false, apps);
+            } else {
+                collect_groups(scr, false, apps);
+            }
 
             const std::string wanted = lowercase(trim(spec));
             const running_app *target = nullptr;
@@ -579,6 +622,15 @@ namespace eka2l1::desktop {
             }
 
             if (target) {
+                if (bridge) {
+                    if (bridge->switches.size() >= 64) {
+                        *err = "ROM window switch queue full";
+                        return switch_result::failed;
+                    }
+                    bridge->switches.push_back(target->window_group);
+                    if (result) *result = *target;
+                    return switch_result::queued;
+                }
                 window_server *ws = get_window_server_through_system(state.symsys.get());
                 epoc::window_group *group = ws ? ws->get_group_from_id(target->window_group) : nullptr;
 
@@ -878,6 +930,16 @@ namespace eka2l1::desktop {
             return "OK " + json + "]";
         }
 
+        if (verb == "list" || verb == "focus") {
+            auto *kern = state_.symsys ? state_.symsys->get_kernel_system() : nullptr;
+            if (kern) {
+                const std::lock_guard<kernel_system> guard(*kern);
+                auto *bridge = get_rom_window_bridge(kern);
+                if (bridge && !bridge->snapshot.ready)
+                    return "ERR ROM window bridge not ready (install the current SysState.exe)";
+            }
+        }
+
         if (verb == "list") {
             const std::vector<running_app> apps = list_running_apps(state_, lowercase(arg) == "all");
             std::string json = "[";
@@ -928,6 +990,9 @@ namespace eka2l1::desktop {
 
             running_app app;
             switch (switch_to_app(state_, arg, &app, &err)) {
+            case switch_result::queued:
+                return "OK queued uid=" + hex_uid(app.uid) + " wg=" + std::to_string(app.window_group);
+
             case switch_result::switched:
                 return "OK switched uid=" + hex_uid(app.uid) + " name=\"" + json_escape(app.name) + "\" wg="
                     + std::to_string(app.window_group) + " ordinal=" + std::to_string(app.ordinal) + " focus="

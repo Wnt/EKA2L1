@@ -36,6 +36,7 @@ set(CORE_TEST_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/services/svg_icon.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/sensor/buffering.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/sensor/rotation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/services/window/rom_bridge.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/surface.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/scale.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/services/window/protocol.cpp

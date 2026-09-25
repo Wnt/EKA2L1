@@ -1,5 +1,6 @@
 
 add_library(epocservs
+        src/window/rom_bridge.cpp
         include/services/allocator.h
         include/services/context.h
         include/services/faker.h
