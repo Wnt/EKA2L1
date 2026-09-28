@@ -365,6 +365,7 @@ namespace eka2l1 {
         // Recognition depends on the data and the name, not on server state, so this
         // is a static and can be exercised on its own.
         static data_recog_result recognize_data_impl(common::ro_stream &stream, const std::u16string &name);
+        static std::string recognize_by_extension(const std::u16string &extension);
 
         /**
          * \brief Forget a registeration without waiting for the next rescan.

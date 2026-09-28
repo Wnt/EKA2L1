@@ -94,3 +94,24 @@ TEST_CASE("recognizer_reads_the_magic_for_media", "applist") {
     // ftyp sits at byte 4, so the brand runs from 4 to 11.
     REQUIRE(type_of(recognize({ 0, 0, 0, 0x18, 'f', 't', 'y', 'p', 'm', 'p', '4', '2' }, u"c:\\clip.dat")) == "video/mp4");
 }
+
+TEST_CASE("recognizer_knows_the_series80_media_types", "applist") {
+    // Series 80's Images, Music player and RealPlayer keep only the files whose type they
+    // handle, so each of their formats has to come back as the MIME type the ROM names.
+    REQUIRE(type_of(recognize({ 0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10, 'J', 'F', 'I', 'F', 0, 1 }, u"c:\\a.dat")) == "image/jpeg");
+    REQUIRE(type_of(recognize({ 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D }, u"c:\\a.dat")) == "image/png");
+    REQUIRE(type_of(recognize(bytes("GIF89a......"), u"c:\\a.dat")) == "image/gif");
+    REQUIRE(type_of(recognize(bytes("BM6.......6."), u"c:\\a.dat")) == "image/bmp");
+    REQUIRE(type_of(recognize({ 'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 1, 0, 2 }, u"c:\\a.dat")) == "audio/midi");
+    REQUIRE(type_of(recognize(bytes("#!AMR\n......"), u"c:\\a.dat")) == "audio/amr");
+    REQUIRE(type_of(recognize({ 0xFF, 0xF1, 0x50, 0x80, 0, 0, 0, 0, 0, 0, 0, 0 }, u"c:\\a.dat")) == "audio/aac");
+    REQUIRE(type_of(recognize({ 0, 0, 0, 0x14, 'f', 't', 'y', 'p', '3', 'g', 'p', '4' }, u"c:\\a.dat")) == "video/3gpp");
+    REQUIRE(type_of(recognize({ 0, 0, 0, 0x14, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm' }, u"c:\\a.dat")) == "video/mp4");
+    REQUIRE(type_of(recognize({ '.', 'R', 'M', 'F', 0, 0, 0, 0x12, 0, 1, 0, 0 }, u"c:\\a.dat")) == "application/vnd.rn-realmedia");
+
+    // Bytes that say nothing: the name decides, one step above EPossible.
+    data_recog_result named = recognize(bytes("nothing at all"), u"c:\\My files\\clip.3GP");
+    REQUIRE(type_of(named) == "video/3gpp");
+    REQUIRE(named.confidence_rating_ > data_recognition_confidence_possible);
+    REQUIRE(type_of(recognize(bytes("nothing at all"), u"c:\\tune.mid")) == "audio/midi");
+}

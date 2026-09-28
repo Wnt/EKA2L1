@@ -955,10 +955,10 @@ namespace eka2l1 {
                 info.size = common::file_size(real_path_utf8);
             }
 
-            /* TODO: Recover this code with new EKA2L1's common code.
-            auto last_mod = fs::last_write_time(*real_path);
-            info.last_write = static_cast<uint64_t>(last_mod.time_since_epoch().count());
-            */
+            // Left unset, directory listings (RDir, GetDir) showed whatever was on the stack as
+            // the file's date: RealPlayer listed three copies of one file as 2003 and 2004.
+            const std::uint64_t last_mod = common::get_last_modifiy_since_ad(*real_path);
+            info.last_write = (last_mod == 0xFFFFFFFFFFFFFFFFULL) ? 0 : last_mod;
 
             std::string path_utf8 = common::ucs2_to_utf8(path);
 

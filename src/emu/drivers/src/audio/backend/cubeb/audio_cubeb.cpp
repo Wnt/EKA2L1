@@ -56,10 +56,9 @@ namespace eka2l1::drivers {
 #ifdef EKA2L1_PLATFORM_ANDROID
         preferred_rate = 48000;
 #else
-        const auto result = cubeb_get_preferred_sample_rate(context_, &preferred_rate);
-
-        if (result != CUBEB_OK) {
-            return 0;
+        if (!context_ || (cubeb_get_preferred_sample_rate(context_, &preferred_rate) != CUBEB_OK)) {
+            // No device: the null sink runs at any rate; pick the common desktop one.
+            return 48000;
         }
 #endif
 
@@ -68,10 +67,7 @@ namespace eka2l1::drivers {
 
     std::unique_ptr<audio_output_stream> cubeb_audio_driver::new_output_stream(const std::uint32_t sample_rate,
         const std::uint8_t channels, data_callback callback) {
-        if (!init_) {
-            return nullptr;
-        }
-
+        // Without a device the stream is a null sink (context_ null): players still run in real time.
         return std::make_unique<cubeb_audio_output_stream>(this, context_, sample_rate, channels, callback);
     }
 
