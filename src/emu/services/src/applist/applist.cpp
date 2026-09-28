@@ -1193,18 +1193,29 @@ namespace eka2l1 {
         config::state *conf = kern->get_config();
 
         if (conf && conf->mime_detection) {
-            LOG_TRACE(SERVICE_APPLIST, "AppList::AppForDocument datatype stubbed with file extension");
+            // Recognise the document as RecognizeData would: its first bytes, then its name.
+            // Series 80's Images, Music player and RealPlayer list a folder by asking this for
+            // every file and keep only the ones whose MIME type they handle; an extension
+            // echoed back as the type ("JPG") matched nothing, so they listed no files at all.
+            std::string mime;
+            symfile f = sys->get_io_system()->open_file(path, READ_MODE | BIN_MODE);
 
-            const std::u16string ext = eka2l1::path_extension(path);
-            if (!ext.empty()) {
-                if (common::compare_ignore_case(ext, u".swf") == 0) {
-                    app.data_type.data_type.assign(nullptr, "application/x-shockwave-flash");
-                } else {
-                    app.data_type.data_type.assign(nullptr, common::uppercase_string(common::ucs2_to_utf8(ext.substr(1))));
-                }
+            if (f) {
+                ro_file_stream stream(f.get());
+                data_recog_result recog = recognize_data_impl(stream, path);
+                mime = recog.type_.type_name_.to_std_string(nullptr);
+                f->close();
             } else {
-                app.data_type.data_type.assign(nullptr, "UNK");
+                const std::u16string ext = eka2l1::path_extension(path);
+                mime = ext.empty() ? std::string() : recognize_by_extension(ext);
             }
+
+            if (!mime.empty()) {
+                app.data_type.data_type.assign(nullptr, mime);
+                app.uid = find_data_type_handler(regs, mime, 0);
+            }
+
+            LOG_TRACE(SERVICE_APPLIST, "AppList::AppForDocument {}: {} -> 0x{:X}", common::ucs2_to_utf8(path), mime, app.uid);
         } else {
             LOG_TRACE(SERVICE_APPLIST, "AppList::AppForDocument datatype left empty!");
         }
@@ -1244,6 +1255,30 @@ namespace eka2l1 {
         }
 
         get_app_for_document_impl(ctx, path.value());
+    }
+
+    // The media types the Series 80 ROM's own apps and recognisers name (strings in the RAE-6 ROM).
+    std::string applist_server::recognize_by_extension(const std::u16string &extension) {
+        static const std::pair<const char16_t *, const char *> table[] = {
+            { u".jpg", "image/jpeg" }, { u".jpeg", "image/jpeg" }, { u".jpe", "image/jpeg" },
+            { u".png", "image/png" }, { u".gif", "image/gif" }, { u".bmp", "image/bmp" },
+            { u".tif", "image/tiff" }, { u".tiff", "image/tiff" }, { u".wbmp", "image/vnd.wap.wbmp" },
+            { u".mbm", "image/x-epoc-mbm" },
+            { u".mp3", "audio/mpeg" }, { u".aac", "audio/aac" }, { u".m4a", "audio/mp4" },
+            { u".amr", "audio/amr" }, { u".wav", "audio/wav" }, { u".mid", "audio/midi" },
+            { u".midi", "audio/midi" }, { u".rmi", "audio/midi" },
+            { u".3gp", "video/3gpp" }, { u".3g2", "video/3gpp2" }, { u".mp4", "video/mp4" },
+            { u".rm", "application/vnd.rn-realmedia" }, { u".rv", "video/vnd.rn-realvideo" },
+            { u".ra", "audio/x-pn-realaudio" }, { u".ram", "audio/x-pn-realaudio" },
+        };
+
+        for (const auto &[ext, type] : table) {
+            if (common::compare_ignore_case(extension, std::u16string(ext)) == 0) {
+                return type;
+            }
+        }
+
+        return std::string();
     }
 
     data_recog_result applist_server::recognize_data_impl(common::ro_stream &stream, const std::u16string &name) {
@@ -1305,10 +1340,65 @@ namespace eka2l1 {
             return result;
         }
 
-        if (memcmp(magic8, "ftypmp42", 8) == 0) {
-            result.type_.type_name_.assign(nullptr, "video/mp4");
+        // ISO media: "ftyp" at byte 4, then the major brand.
+        if (memcmp(magic8, "ftyp", 4) == 0) {
+            const char *brand = reinterpret_cast<const char *>(magic8 + 4);
+            const char *type = "video/mp4";
+
+            if (memcmp(brand, "3gp", 3) == 0 || memcmp(brand, "3gs", 3) == 0 || memcmp(brand, "3ge", 3) == 0) {
+                type = "video/3gpp";
+            } else if (memcmp(brand, "3g2", 3) == 0) {
+                type = "video/3gpp2";
+            } else if (memcmp(brand, "M4A ", 4) == 0) {
+                type = "audio/mp4";
+            }
+
+            result.type_.type_name_.assign(nullptr, type);
             result.confidence_rating_ = data_recognition_confidence_probable;
             return result;
+        }
+
+        const char *magic_type = nullptr;
+
+        if ((magic4[0] == 0xFF) && (magic4[1] == 0xD8) && (magic4[2] == 0xFF)) {
+            magic_type = "image/jpeg";
+        } else if ((magic4[0] == 0x89) && (magic4[1] == 'P') && (magic4[2] == 'N') && (magic4[3] == 'G')) {
+            magic_type = "image/png";
+        } else if (memcmp(magic4, "GIF8", 4) == 0) {
+            magic_type = "image/gif";
+        } else if ((memcmp(magic4, "II*", 3) == 0 && magic4[3] == 0) || (magic4[0] == 'M' && magic4[1] == 'M' && magic4[2] == 0 && magic4[3] == '*')) {
+            magic_type = "image/tiff";
+        } else if (memcmp(magic4, "MThd", 4) == 0) {
+            magic_type = "audio/midi";
+        } else if ((memcmp(magic4, "#!AM", 4) == 0) && (memcmp(magic8, "R", 1) == 0)) {
+            magic_type = "audio/amr";
+        } else if ((memcmp(magic4, ".RMF", 4) == 0)) {
+            magic_type = "application/vnd.rn-realmedia";
+        } else if ((memcmp(magic4, ".ra", 3) == 0) && (magic4[3] == 0xFD)) {
+            magic_type = "audio/x-pn-realaudio";
+        } else if ((magic4[0] == 0xFF) && ((magic4[1] & 0xF6) == 0xF0)) {
+            // ADTS: MPEG sync with layer bits 00.
+            magic_type = "audio/aac";
+        } else if ((magic4[0] == 0xFF) && ((magic4[1] & 0xE0) == 0xE0) && ((magic4[1] & 0x06) != 0)) {
+            magic_type = "audio/mpeg";
+        } else if ((magic4[0] == 'B') && (magic4[1] == 'M')) {
+            magic_type = "image/bmp";
+        }
+
+        if (magic_type) {
+            result.type_.type_name_.assign(nullptr, magic_type);
+            result.confidence_rating_ = data_recognition_confidence_probable;
+            return result;
+        }
+
+        if (!extension.empty()) {
+            const std::string by_name = recognize_by_extension(extension);
+
+            if (!by_name.empty()) {
+                result.type_.type_name_.assign(nullptr, by_name);
+                result.confidence_rating_ = data_recognition_confidence_possible + 1;
+                return result;
+            }
         }
 
         // Probable, not possible: EPossible is numerically zero, which a client reads

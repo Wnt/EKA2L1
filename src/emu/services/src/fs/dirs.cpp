@@ -95,7 +95,15 @@ namespace eka2l1 {
 
         if (attrib_raw & epoc::fs::entry_att_allow_uid) {
             attrib |= io_attrib_allow_uid;
-            attrib &= ~io_attrib_include_dir;
+
+            // KEntryAttAllowUid only asks for the files' UIDs to be read. A directory has no
+            // UIDs, so it can only fail a real UID match: drop directories only when one is
+            // asked for. Series 80's folder pickers (RealPlayer, Images, Music player) list
+            // subfolders with KEntryAttDir | KEntryAttAllowUid | KEntryAttMatchExclusive and a
+            // null UID type, and got no folders at all.
+            if (utype->uid1 || utype->uid2 || utype->uid3) {
+                attrib &= ~io_attrib_include_dir;
+            }
         }
 
         fs_server *serv = server<fs_server>();
@@ -113,7 +121,7 @@ namespace eka2l1 {
         size_t dir_handle = obj_table_.add(node);
         int dir_handle_i = static_cast<int>(dir_handle);
 
-        LOG_TRACE(SERVICE_EFSRV, "UID requested: 0x{:X}, 0x{:X}, 0x{:X}", utype->uid1, utype->uid2, utype->uid3);
+        LOG_TRACE(SERVICE_EFSRV, "UID requested: 0x{:X}, 0x{:X}, 0x{:X}, attributes 0x{:X} -> io 0x{:X}", utype->uid1, utype->uid2, utype->uid3, attrib_raw, attrib);
 
         ctx->write_data_to_descriptor_argument<int>(3, dir_handle_i);
         ctx->complete(epoc::error_none);
