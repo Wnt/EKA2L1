@@ -408,7 +408,7 @@ namespace eka2l1::drivers {
         };
 
         if (avformat_open_input(&format_context_, url_.c_str(), nullptr, nullptr) < 0) {
-            LOG_ERROR(DRIVER_AUD, "Error while opening AVFormat Input!");
+            LOG_ERROR(DRIVER_AUD, "Error while opening AVFormat Input {}!", url_);
             avformat_free_context(format_context_);
 
             format_context_ = nullptr;

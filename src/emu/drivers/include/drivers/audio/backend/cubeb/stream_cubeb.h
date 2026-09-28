@@ -22,6 +22,10 @@
 #include <cubeb/cubeb.h>
 #include <drivers/audio/stream.h>
 
+#include <atomic>
+#include <thread>
+#include <vector>
+
 namespace eka2l1::drivers {
     struct cubeb_audio_stream_base {
     protected:
@@ -32,6 +36,16 @@ namespace eka2l1::drivers {
         std::uint8_t internal_channels_;
 
         bool in_action_;
+
+        // Null sink: with no audio device (a headless station) cubeb has no stream. A clock thread
+        // then pulls the callback at the stream's real rate and drops the samples, so players still
+        // advance, report their position and finish. Silent, never stalled.
+        std::uint32_t sample_rate_;
+        std::atomic<bool> null_running_{ false };
+        std::atomic<std::uint64_t> null_frames_{ 0 };
+        std::thread null_thread_;
+
+        void null_sink_loop();
 
     protected:
         bool current_frame_position_impl(std::uint64_t *val);

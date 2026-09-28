@@ -24,6 +24,8 @@
 #include <common/log.h>
 #include <common/platform.h>
 
+#include <chrono>
+
 namespace eka2l1::drivers {
     static long data_callback_redirector(cubeb_stream *stm, void *user,
         const void *input_buffer, void *output_buffer, long nframes) {
@@ -42,7 +44,13 @@ namespace eka2l1::drivers {
         , callback_(callback)
         , idled_frames_(0)
         , internal_channels_(channels)
-        , in_action_(false) {
+        , in_action_(false)
+        , sample_rate_(sample_rate) {
+        if (!context) {
+            LOG_WARN(DRIVER_AUD, "No audio device: this stream plays into a null sink (silent, real time)");
+            return;
+        }
+
         cubeb_stream_params params;
         params.format = CUBEB_SAMPLE_S16LE;
         params.rate = sample_rate;
@@ -70,12 +78,45 @@ namespace eka2l1::drivers {
             data_callback_redirector, state_callback_redirector, this);
 
         if (result != CUBEB_OK) {
-            LOG_CRITICAL(DRIVER_AUD, "Error trying to initialize cubeb stream!");
+            LOG_CRITICAL(DRIVER_AUD, "Error trying to initialize cubeb stream! Using a null sink (silent, real time)");
+            stream_ = nullptr;
             return;
         }
     }
 
+    void cubeb_audio_stream_base::null_sink_loop() {
+        static constexpr std::uint32_t TICK_MS = 10;
+        std::vector<std::int16_t> scratch;
+        const auto begin = std::chrono::steady_clock::now();
+        std::uint64_t pulled = 0;
+
+        while (null_running_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(TICK_MS));
+
+            const std::uint64_t elapsed_us = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - begin).count());
+            const std::uint64_t due = elapsed_us * sample_rate_ / 1000000ULL;
+
+            if (due <= pulled) {
+                continue;
+            }
+
+            const long frames = static_cast<long>(common::min<std::uint64_t>(due - pulled, sample_rate_));
+            scratch.assign(static_cast<std::size_t>(frames) * internal_channels_, 0);
+
+            call_callback(scratch.data(), frames);
+
+            pulled += static_cast<std::uint64_t>(frames);
+            null_frames_ += static_cast<std::uint64_t>(frames);
+        }
+    }
+
     cubeb_audio_stream_base::~cubeb_audio_stream_base() {
+        null_running_ = false;
+        if (null_thread_.joinable()) {
+            null_thread_.join();
+        }
+
         if (stream_) {
             cubeb_stream_destroy(stream_);
         }
@@ -93,7 +134,9 @@ namespace eka2l1::drivers {
     }
     
     bool cubeb_audio_stream_base::current_frame_position_impl(std::uint64_t *pos) {
-        if (cubeb_stream_get_position(stream_, pos) != CUBEB_OK) {
+        if (!stream_) {
+            *pos = null_frames_;
+        } else if (cubeb_stream_get_position(stream_, pos) != CUBEB_OK) {
             return false;
         }
 
@@ -111,6 +154,16 @@ namespace eka2l1::drivers {
             return true;
         }
 
+        if (!stream_) {
+            idled_frames_ = 0;
+            null_frames_ = 0;
+            null_running_ = true;
+            null_thread_ = std::thread([this]() { null_sink_loop(); });
+            in_action_ = true;
+
+            return true;
+        }
+
         if (cubeb_stream_start(stream_) == CUBEB_OK) {
             in_action_ = true;
             idled_frames_ = 0;
@@ -123,6 +176,18 @@ namespace eka2l1::drivers {
 
     bool cubeb_audio_stream_base::stop_impl() {
         if (!in_action_) {
+            return true;
+        }
+
+        if (!stream_) {
+            null_running_ = false;
+            if (null_thread_.joinable() && (null_thread_.get_id() != std::this_thread::get_id())) {
+                null_thread_.join();
+            } else if (null_thread_.joinable()) {
+                null_thread_.detach();
+            }
+
+            in_action_ = false;
             return true;
         }
 
@@ -143,6 +208,8 @@ namespace eka2l1::drivers {
     }
 
     cubeb_audio_output_stream::~cubeb_audio_output_stream() {
+        // The null sink's thread calls should_stream_idle(): stop it while this object is whole.
+        stop_impl();
     }
 
     bool cubeb_audio_output_stream::should_stream_idle() {
@@ -180,6 +247,11 @@ namespace eka2l1::drivers {
     }
 
     bool cubeb_audio_output_stream::set_volume(const float volume) {
+        if (!stream_) {
+            volume_ = volume;
+            return true;
+        }
+
         if (cubeb_stream_set_volume(stream_, volume * static_cast<float>(driver_->master_volume() / 100.0f)) == CUBEB_OK) {
             volume_ = volume;
             return true;
@@ -203,6 +275,7 @@ namespace eka2l1::drivers {
     }
 
     cubeb_audio_input_stream::~cubeb_audio_input_stream() {
+        stop_impl();
 
     }
 
