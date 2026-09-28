@@ -35,6 +35,7 @@
 #include <BS_thread_pool.hpp>
 
 namespace eka2l1 {
+    class memory_system;
     class io_system;
     class fbs_server;
     class fs_server;
@@ -155,7 +156,8 @@ namespace eka2l1 {
      * 
      * \returns True on success.
      */
-    bool read_icon_data_aif(common::ro_stream *stream, fbs_server *serv, std::vector<apa_app_icon> &icon_list, const address rom_addr = 0, const bool retain_rom_icons = false);
+    bool read_icon_data_aif(common::ro_stream *stream, fbs_server *serv, std::vector<apa_app_icon> &icon_list, const address rom_addr = 0, const bool retain_rom_icons = false,
+        memory_system *rom_icon_mem = nullptr, const address rom_root_dir_list = 0);
 
     /**
      * \brief   Read caption data from localised RSC file

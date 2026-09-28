@@ -33,6 +33,8 @@
 
 #include <common/common.h>
 #include <kernel/kernel.h>
+#include <mem/mem.h>
+#include <loader/rom.h>
 #include <loader/rsc.h>
 #include <system/epoc.h>
 #include <utils/apacmd.h>
@@ -74,12 +76,17 @@ namespace eka2l1 {
         }
     } 
 
-    static void populate_icon_sizes(common::chunkyseri &seri, apa_app_registry *reg) {
+    static void populate_icon_sizes(common::chunkyseri &seri, apa_app_registry *reg, memory_system *mem) {
         std::uint32_t size = reg->app_icons.size();
         seri.absorb(size);
         for (const auto &icon : reg->app_icons) {
-            seri.absorb(icon.bmp_->bitmap_->header_.size_pixels.x);
-            seri.absorb(icon.bmp_->bitmap_->header_.size_pixels.y);
+            // ROM icons (the ROM's own, and disk AIF icons republished for the ROM FBS) have no host bitmap.
+            epoc::bitwise_bitmap *bw = icon.bmp_ ? icon.bmp_->bitmap_
+                                                 : eka2l1::ptr<epoc::bitwise_bitmap>(icon.bmp_rom_addr_).get(mem);
+            std::int32_t w = bw ? bw->header_.size_pixels.x : 0;
+            std::int32_t h = bw ? bw->header_.size_pixels.y : 0;
+            seri.absorb(w);
+            seri.absorb(h);
         }
     }
 
@@ -224,8 +231,12 @@ namespace eka2l1 {
             // So we use a mutex to safeguard it
             const std::lock_guard<std::mutex> guard(list_access_mut_);
 
+            const bool rom_fbs = epoc::rom_fbs_enabled(kern->get_epoc_version());
+            loader::rom *rom_info = rom_fbs ? kern->get_rom_info() : nullptr;
+
             if (!read_icon_data_aif(reinterpret_cast<common::ro_stream *>(&std_rsc_raw), fbsserv, reg.app_icons,
-                                    romaddr, epoc::rom_fbs_enabled(kern->get_epoc_version()))) {
+                                    romaddr, rom_fbs, rom_info ? kern->get_memory_system() : nullptr,
+                                    rom_info ? rom_info->header.rom_root_dir_list : 0)) {
                 return false;
             }
         }
@@ -997,11 +1008,11 @@ namespace eka2l1 {
 
         std::vector<std::uint8_t> buf;
         common::chunkyseri seri(nullptr, 0, common::SERI_MODE_MEASURE);
-        populate_icon_sizes(seri, reg);
+        populate_icon_sizes(seri, reg, sys->get_memory_system());
 
         buf.resize(seri.size());
         seri = common::chunkyseri(buf.data(), buf.size(), common::SERI_MODE_WRITE);
-        populate_icon_sizes(seri, reg);
+        populate_icon_sizes(seri, reg, sys->get_memory_system());
 
         ctx.write_data_to_descriptor_argument(2, buf.data(), static_cast<std::uint32_t>(buf.size()));
         ctx.complete(epoc::error_none);

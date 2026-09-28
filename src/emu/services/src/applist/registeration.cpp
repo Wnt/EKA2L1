@@ -18,6 +18,14 @@
  */
 
 #include <services/applist/applist.h>
+#include <string_view>
+#include <functional>
+#include <cstring>
+#include <fmt/format.h>
+#include <common/log.h>
+#include <common/cvt.h>
+#include <services/window/common.h>
+#include <mem/mem.h>
 #include <services/fbs/fbs.h>
 
 #include <common/benchmark.h>
@@ -644,7 +652,53 @@ namespace eka2l1 {
         }
     }
 
-    bool read_icon_data_aif(common::ro_stream *stream, fbs_server *serv, std::vector<apa_app_icon> &icon_list, const address rom_addr, const bool retain_rom_icons) {
+    // Full ROM mode (EKA2L1_ROM_WSERV + EKA2L1_ROM_FBS): the ARM FBS owns every bitmap handle, so a
+    // bitmap in the private host FBS can never reach an application. An EKA1 ROM bitmap needs no
+    // server at all: CFbsBitmap::Duplicate takes any address User::IsRomAddress accepts as the
+    // CBitwiseBitmap itself, and the ARM window server draws it in place. So a disk AIF icon
+    // (file-format SBM) is republished in that exact ROM shape - 68-byte CBitwiseBitmap, pixel data
+    // (still compressed as in the file) at +0x44 - inside the memory system's extension ROM, and
+    // its address is served like any ROM AIF icon's.
+    static address publish_rom_format_icon(memory_system *mem, const address rom_root, const loader::sbm_header &header,
+        const std::uint8_t *data, const std::size_t data_size) {
+        static constexpr std::uint32_t ROM_BITMAP_UID = 0x10000040;
+        static constexpr std::uint32_t ROM_BITMAP_DATA_OFFSET = 0x44;
+        static_assert(sizeof(loader::sbm_header) == 40, "EKA1 SEpocBitmapHeader is 40 bytes");
+
+        if (!mem || (header.size_pixels.x <= 0) || (header.size_pixels.y <= 0) || (header.bit_per_pixels == 0)
+            || (header.bit_per_pixels > 32)) {
+            return 0;
+        }
+
+        std::vector<std::uint8_t> blob(ROM_BITMAP_DATA_OFFSET + data_size, 0);
+        auto put32 = [&](const std::size_t off, const std::uint32_t v) {
+            std::memcpy(blob.data() + off, &v, 4);
+        };
+
+        put32(0x00, ROM_BITMAP_UID);
+        // EKA1 ROM bitmaps carry only the initial display mode in the settings word.
+        put32(0x04, static_cast<std::uint32_t>(epoc::get_display_mode_from_bpp(header.bit_per_pixels, header.color)));
+        put32(0x08, 0); // allocator
+        put32(0x0C, 0); // heap: none, so the data is found at this + data offset
+        put32(0x10, static_cast<std::uint32_t>(epoc::get_byte_width(header.size_pixels.x,
+                        static_cast<std::uint8_t>(header.bit_per_pixels))));
+        std::memcpy(blob.data() + 0x14, &header, sizeof(loader::sbm_header));
+        put32(0x3C, 0xFFFFFFFF); // spare, as the ROM's own icons have it
+        put32(0x40, ROM_BITMAP_DATA_OFFSET);
+
+        if (data_size) {
+            std::memcpy(blob.data() + ROM_BITMAP_DATA_OFFSET, data, data_size);
+        }
+
+        // Keyed by content: a rescan (install, drive change) maps nothing twice.
+        const std::size_t digest = std::hash<std::string_view>{}(std::string_view(reinterpret_cast<const char *>(blob.data()), blob.size()));
+        const std::string key_ascii = fmt::format("applist-disk-aif-icon:{:016X}:{:X}", static_cast<std::uint64_t>(digest), blob.size());
+
+        return mem->map_rom_data(common::utf8_to_ucs2(key_ascii), blob, rom_root);
+    }
+
+    bool read_icon_data_aif(common::ro_stream *stream, fbs_server *serv, std::vector<apa_app_icon> &icon_list, const address rom_addr, const bool retain_rom_icons,
+        memory_system *rom_icon_mem, const address rom_root_dir_list) {
         // Seek to header pos, over the UIDs
         epoc::uid_type uids;
         if (stream->read(&uids, sizeof(epoc::uid_type)) != sizeof(epoc::uid_type)) {
@@ -738,6 +792,29 @@ namespace eka2l1 {
                     icon_list[i * 2 + 1].bmp_rom_addr_ = icon_list[i * 2].bmp_rom_addr_ + size_of_source;
                 } else {
                     auto read_and_create_bitmap = [&](const std::size_t index) {
+                        if (retain_rom_icons && rom_icon_mem) {
+                            loader::sbm_header rom_header;
+                            if (!rom_header.internalize(*stream) || (rom_header.bitmap_size < rom_header.header_len)) {
+                                return false;
+                            }
+
+                            std::vector<std::uint8_t> pixels(rom_header.bitmap_size - rom_header.header_len);
+                            if (!pixels.empty() && (stream->read(pixels.data(), pixels.size()) != pixels.size())) {
+                                return false;
+                            }
+
+                            icon_list[index].bmp_ = nullptr;
+                            icon_list[index].bmp_rom_addr_ = publish_rom_format_icon(rom_icon_mem, rom_root_dir_list, rom_header,
+                                pixels.data(), pixels.size());
+
+                            if (!icon_list[index].bmp_rom_addr_) {
+                                LOG_WARN(SERVICE_APPLIST, "Disk AIF icon {}x{} could not be published as a ROM bitmap",
+                                    rom_header.size_pixels.x, rom_header.size_pixels.y);
+                            }
+
+                            return true;
+                        }
+
                         if (!serv) {
                             // No host FBS server to own a disk-format icon: no icon, never a null deref.
                             return false;
@@ -819,6 +896,14 @@ namespace eka2l1 {
                     icon_list[i].bmp_ = nullptr;
                     icon_list[i].bmp_rom_addr_ = rom_addr + static_cast<address>(mbm_offset)
                         + icon_list_file.trailer.sbm_offsets[i];
+                    icon_list[i].number_ = i / 2;
+                    continue;
+                }
+                if (retain_rom_icons && rom_icon_mem) {
+                    const loader::sbm_header &rom_header = icon_list_file.sbm_headers[i];
+                    icon_list[i].bmp_ = nullptr;
+                    icon_list[i].bmp_rom_addr_ = publish_rom_format_icon(rom_icon_mem, rom_root_dir_list, rom_header,
+                        mbm_data.data() + icon_list_file.bitmap_data_offset(i), rom_header.bitmap_size - rom_header.header_len);
                     icon_list[i].number_ = i / 2;
                     continue;
                 }
