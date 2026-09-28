@@ -352,6 +352,11 @@ namespace eka2l1 {
             const std::string *environment_main = nullptr);
 
     public:
+        // True once init() has resolved the FBS/FS servers and scanned the registries once.
+        bool is_inited() const {
+            return flags & AL_INITED;
+        }
+
         explicit applist_server(system *sys);
         ~applist_server() override;
 

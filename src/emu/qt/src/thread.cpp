@@ -433,6 +433,9 @@ namespace eka2l1::desktop {
         parser.add("--device, -dvc", "Set a device to be ran, through the given firmware code. This device will also be saved in the configuration as the current device.\n"
                                "\t\t\t Example: --device RH-29",
             device_set_option_handler);
+        parser.add("--install-drive", "Drive (c, d or e) for the --install options after it.\n"
+                                      "\t\t\t  Default: C on a Series 80 device, E elsewhere.",
+            install_drive_option_handler);
         parser.add("--install, -i", "Install a SIS.", app_install_option_handler);
         parser.add("--remove, -r", "Remove an package.", package_remove_option_handler);
         parser.add("--fullscreen, -f", "Display the emulator in fullscreen.", fullscreen_option_handler);

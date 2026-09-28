@@ -26,6 +26,7 @@ namespace eka2l1::common {
     class arg_parser;
 }
 
+bool install_drive_option_handler(eka2l1::common::arg_parser *parser, void *userdata, std::string *err);
 bool app_install_option_handler(eka2l1::common::arg_parser *parser, void *userdata, std::string *err);
 bool package_remove_option_handler(eka2l1::common::arg_parser *parser, void *userdata, std::string *err);
 bool app_specifier_option_handler(eka2l1::common::arg_parser *parser, void *userdata, std::string *err);

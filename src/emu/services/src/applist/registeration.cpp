@@ -738,6 +738,11 @@ namespace eka2l1 {
                     icon_list[i * 2 + 1].bmp_rom_addr_ = icon_list[i * 2].bmp_rom_addr_ + size_of_source;
                 } else {
                     auto read_and_create_bitmap = [&](const std::size_t index) {
+                        if (!serv) {
+                            // No host FBS server to own a disk-format icon: no icon, never a null deref.
+                            return false;
+                        }
+
                         loader::sbm_header bmp_header;
                         if (!bmp_header.internalize(*stream)) {
                             return false;

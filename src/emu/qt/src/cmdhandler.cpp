@@ -44,10 +44,36 @@
 #include <vfs/vfs.h>
 #include <qt/utils.h>
 
+#include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <iostream>
 
 using namespace eka2l1;
+
+// The drive --install puts a package's "!:" files on. Unset = the device default: C: on a
+// Series 80 device (whose only other writable drive, D:, is the memory card; E: does not exist
+// on the real hardware), E: elsewhere (upstream's choice, kept for the S60/N-Gage devices).
+static int install_drive_override = -1;
+
+bool install_drive_option_handler(eka2l1::common::arg_parser *parser, void *userdata, std::string *err) {
+    const char *letter = parser->next_token();
+
+    if (!letter || (std::strlen(letter) < 1) || ((std::strlen(letter) == 2) && (letter[1] != ':')) || (std::strlen(letter) > 2)) {
+        *err = "--install-drive takes one drive letter: c, d or e (it applies to the --install options after it)";
+        return false;
+    }
+
+    const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(letter[0])));
+
+    if ((c != 'c') && (c != 'd') && (c != 'e')) {
+        *err = std::string("--install-drive ") + letter + ": only c, d or e are writable install drives";
+        return false;
+    }
+
+    install_drive_override = drive_a + (c - 'a');
+    return true;
+}
 
 bool app_install_option_handler(eka2l1::common::arg_parser *parser, void *userdata, std::string *err) {
     const char *path = parser->next_token();
@@ -59,11 +85,16 @@ bool app_install_option_handler(eka2l1::common::arg_parser *parser, void *userda
 
     desktop::emulator *emu = reinterpret_cast<desktop::emulator *>(userdata);
 
-    // Since it's inconvenient for user to specify the drive (they are all the same on computer),
-    // and it's better to install in C since there is many apps required
-    // to be in it and hardcoded the drive, just hardcode drive E here.
+    drive_number drive = drive_e;
+
+    if (install_drive_override >= 0) {
+        drive = static_cast<drive_number>(install_drive_override);
+    } else if (emu->symsys->is_s80_device_active()) {
+        drive = drive_c;
+    }
+
     // installation_result_success is 0: compare, don't convert the enum to bool.
-    const bool result = emu->symsys->install_package(common::utf8_to_ucs2(path), drive_e)
+    const bool result = emu->symsys->install_package(common::utf8_to_ucs2(path), drive)
         == package::installation_result_success;
 
     if (!result) {
@@ -78,7 +109,14 @@ bool app_install_option_handler(eka2l1::common::arg_parser *parser, void *userda
         auto *svr = reinterpret_cast<eka2l1::applist_server *>(kern->get_by_name<service::server>(
             get_app_list_server_name_by_epocver(kern->get_epoc_version())));
         if (svr) {
-            svr->rescan_registries(emu->symsys->get_io_system());
+            // Before its first client the server has not resolved its FBS server yet (init() does that
+            // and scans once): a rescan then would build disk icons against a null FBS server (SIGSEGV
+            // on the first AIF outside ROM, e.g. the OPL runtime's Opl.aif). Init instead; it scans.
+            if (svr->is_inited()) {
+                svr->rescan_registries(emu->symsys->get_io_system());
+            } else {
+                svr->get_registerations();
+            }
         }
     }
 
