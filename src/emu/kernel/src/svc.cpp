@@ -1117,6 +1117,50 @@ namespace eka2l1::epoc {
         return result;
     }
 
+    // EKA1 (Symbian 7.0s) exec 0x8000E8: fill a server-side message object from a message handle, behind
+    // RMessage2::RMessage2(const RMessagePtr2 &) (EUSER ord 1763) and RMessage::RMessage(const RMessagePtr2 &)
+    // (ord 1788). Read from the RAE-6 ROM's EUSER: the RMessage2 constructor passes `this | 1`, the RMessage one
+    // `this` with iHandle at +0x1C already set - the same odd-pointer convention RServer::Receive uses to tell
+    // the IPCv2 layout (message2) from the IPCv1 one (message1). Unimplemented, it left the object with only its
+    // handle: the ROM's EikNotifierServer ("Main") then died with reason 10 while showing an OPL error alert
+    // (RMRReverse's first-run "Divide by zero"), so the app vanished behind a "Program closed" note instead.
+    BRIDGE_FUNC(void, message_construct_eka1, std::int32_t msg_handle, eka2l1::ptr<void> data) {
+        ipc_msg_ptr msg = kern->get_msg(msg_handle);
+
+        if (!msg) {
+            LOG_WARN(KERNEL, "MessageConstructFromPtr: unknown IPC message handle 0x{:X}", msg_handle);
+            return;
+        }
+
+        kernel::process *crr = kern->crr_process();
+
+        if (data.ptr_address() & 1) {
+            service::message2 *msg2 = eka2l1::ptr<service::message2>(data.ptr_address() & ~1).get(crr);
+
+            if (!msg2) {
+                return;
+            }
+
+            msg2->ipc_msg_handle = msg_handle;
+            msg2->function = msg->function;
+            msg2->session_ptr = msg->session_ptr_lle;
+            msg2->flags = msg->args.flag;
+            std::copy(msg->args.args, msg->args.args + 4, msg2->args);
+        } else {
+            service::message1 *msg1 = data.cast<service::message1>().get(crr);
+
+            if (!msg1) {
+                return;
+            }
+
+            // client_thread_handle stays as the constructor wrote it.
+            msg1->ipc_msg_handle = msg_handle;
+            msg1->function = msg->function;
+            msg1->session_ptr = msg->session_ptr_lle;
+            std::copy(msg->args.args, msg->args.args + 4, msg1->args);
+        }
+    }
+
     BRIDGE_FUNC(std::int32_t, message_ipc_copy_eka1, kernel::handle h, std::int32_t param, eka2l1::ptr<ipc_copy_info> info,
         std::int32_t start_offset) {
         if (!info || param < 0 || param > 3) {
@@ -7093,6 +7137,7 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0x8000E4, message_get_des_length),
         BRIDGE_REGISTER(0x8000E5, message_get_des_max_length),
         BRIDGE_REGISTER(0x8000E6, message_ipc_copy_eka1),
+        BRIDGE_REGISTER(0x8000E8, message_construct_eka1),
         BRIDGE_REGISTER(0x8000EA, message_queue_notify_space_available),
         BRIDGE_REGISTER(0x8000EB, message_queue_notify_data_available),
         BRIDGE_REGISTER(0xC0000C, logical_channel_do_request_eka1),
@@ -7227,6 +7272,7 @@ namespace eka2l1::epoc {
         BRIDGE_REGISTER(0x8000E4, message_get_des_length),
         BRIDGE_REGISTER(0x8000E5, message_get_des_max_length),
         BRIDGE_REGISTER(0x8000E6, message_ipc_copy_eka1),
+        BRIDGE_REGISTER(0x8000E8, message_construct_eka1),
         BRIDGE_REGISTER(0x8000EA, message_queue_notify_space_available),
         BRIDGE_REGISTER(0x8000EB, message_queue_notify_data_available),
         BRIDGE_REGISTER(0xC0000C, logical_channel_do_request_eka1),
