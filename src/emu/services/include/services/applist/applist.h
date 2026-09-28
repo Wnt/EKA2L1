@@ -405,6 +405,14 @@ namespace eka2l1 {
         apa_app_registry *get_registration(const std::uint32_t uid);
 
         /**
+         * \brief Start an OPL application named by its .app path through the OPL launcher.
+         *
+         * \returns False when the path is not an OPL application (ok untouched); true when it is, with ok
+         *          telling whether it started.
+         */
+        bool launch_opl_app_by_path(const std::u16string &app_path, kernel::uid *thread_id, bool &ok);
+
+        /**
          * \brief Get all app registerations.
          */
         std::vector<apa_app_registry> &get_registerations();

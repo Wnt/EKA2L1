@@ -734,6 +734,44 @@ namespace eka2l1 {
         ctx.complete(count);
     }
 
+    // A translated OPL program (UID1 KDirectFileStoreLayoutUid, UID2 KUidOplApp 0x100055C1, UID3 its app
+    // UID; RMRSol, RMRGolf, RMRReverse, Atomic) is an .app that is not a DLL: nothing can load it as code.
+    // Returns its UID3 when the file at the path is one, 0 otherwise.
+    static std::uint32_t opl_app_uid_at(io_system *io, const std::u16string &app_path) {
+        if (app_path.empty()) {
+            return 0;
+        }
+        symfile app_file = io->open_file(app_path, READ_MODE | BIN_MODE);
+        if (!app_file) {
+            return 0;
+        }
+        std::uint32_t uids[3] = { 0, 0, 0 };
+        const bool whole = (app_file->read_file(0, uids, 4, 3) == 3 * 4);
+        app_file->close();
+        return (whole && (uids[1] == 0x100055C1)) ? uids[2] : 0;
+    }
+
+    // Desk (and any StartApp by command line) names the OPL .app itself; start it the way launch_app() does
+    // for a registry launch, through the OPL launcher. Returns false when the path is not an OPL app.
+    bool applist_server::launch_opl_app_by_path(const std::u16string &app_path, kernel::uid *thread_id, bool &ok) {
+        const std::uint32_t uid = opl_app_uid_at(sys->get_io_system(), app_path);
+        if (!uid) {
+            return false;
+        }
+        apa_app_registry *reg = get_registration(uid);
+        if (!reg) {
+            LOG_ERROR(SERVICE_APPLIST, "StartApp: OPL app {} (0x{:X}) is not registered", common::ucs2_to_utf8(app_path), uid);
+            ok = false;
+            return true;
+        }
+        epoc::apa::command_line parameter;
+        parameter.launch_cmd_ = epoc::apa::command_run;
+        ok = launch_app(*reg, parameter, thread_id);
+        LOG_TRACE(SERVICE_APPLIST, "StartApp: OPL app {} (0x{:X}) through the OPL launcher: {}", common::ucs2_to_utf8(app_path),
+            uid, ok ? "started" : "failed");
+        return true;
+    }
+
     void applist_server::launch_app_s60v2(service::ipc_context &ctx, const bool return_thread_id) {
         std::optional<std::u16string> cmd_line = ctx.get_argument_value<std::u16string>(0);
         if (!cmd_line || cmd_line->empty()) {
@@ -751,6 +789,22 @@ namespace eka2l1 {
             app_path = cmd.substr(1, (closing == std::u16string::npos) ? std::u16string::npos : closing - 1);
         } else {
             app_path = cmd.substr(0, cmd.find(u' '));
+        }
+
+        {
+            kernel::uid opl_thread_id = 0;
+            bool opl_ok = false;
+            if (launch_opl_app_by_path(app_path, &opl_thread_id, opl_ok)) {
+                if (!opl_ok) {
+                    ctx.complete(epoc::error_not_found);
+                    return;
+                }
+                if (return_thread_id) {
+                    ctx.write_data_to_descriptor_argument<kernel::uid_eka1>(1, static_cast<kernel::uid_eka1>(opl_thread_id));
+                }
+                ctx.complete(epoc::error_none);
+                return;
+            }
         }
 
         codeseg_ptr seg = kern->get_lib_manager()->load(app_path);
@@ -1035,20 +1089,33 @@ namespace eka2l1 {
             return;
         }
 
-        // Simply load only
-        codeseg_ptr seg = kern->get_lib_manager()->load(arguments[0].std_str());
-        std::u16string app_launch = APA_APP_RUNNER;
-
-        if (std::get<0>(seg->get_uids()) == epoc::EXECUTABLE_UID) {
-            app_launch = arguments[0].std_str();
-        }
-
         kernel::uid thread_id = 0;
-        if (!launch_app(app_launch, cmd_line.value(), &thread_id, ctx.msg->own_thr->owning_process())) {
-            LOG_ERROR(SERVICE_APPLIST, "Failed to create new app process (command line: {})", common::ucs2_to_utf8(cmd_line.value()));
-            ctx.complete(epoc::error_no_memory);
+        bool opl_ok = false;
+        if (launch_opl_app_by_path(arguments[0].std_str(), &thread_id, opl_ok)) {
+            if (!opl_ok) {
+                ctx.complete(epoc::error_not_found);
+                return;
+            }
+        } else {
+            // Simply load only
+            codeseg_ptr seg = kern->get_lib_manager()->load(arguments[0].std_str());
+            if (!seg) {
+                LOG_ERROR(SERVICE_APPLIST, "Failed to launch a new app! Cannot load {}", common::ucs2_to_utf8(arguments[0].std_str()));
+                ctx.complete(epoc::error_not_found);
+                return;
+            }
+            std::u16string app_launch = APA_APP_RUNNER;
 
-            return;
+            if (std::get<0>(seg->get_uids()) == epoc::EXECUTABLE_UID) {
+                app_launch = arguments[0].std_str();
+            }
+
+            if (!launch_app(app_launch, cmd_line.value(), &thread_id, ctx.msg->own_thr->owning_process())) {
+                LOG_ERROR(SERVICE_APPLIST, "Failed to create new app process (command line: {})", common::ucs2_to_utf8(cmd_line.value()));
+                ctx.complete(epoc::error_no_memory);
+
+                return;
+            }
         }
 
         if (kern->is_eka1()) {
