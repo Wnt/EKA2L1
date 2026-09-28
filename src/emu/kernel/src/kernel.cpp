@@ -550,7 +550,27 @@ namespace eka2l1 {
                 return true;
             }
 
-            LOG_ERROR(KERNEL, "Access violation {} address 0x{:X} in thread {}", (exception_type == arm::exception_type_access_violation_read) ? "reading" : "writing", exception_data, crr_thread()->name());
+            {
+                // Name the faulting code: pc and lr with the module (and nearest export) they are in.
+                kernel::process *pr = crr_process();
+                auto where = [&](const address a) -> std::string {
+                    for (const auto &seg_obj : get_codeseg_list()) {
+                        codeseg_ptr seg = reinterpret_cast<codeseg_ptr>(seg_obj.get());
+                        if (!seg || !pr) {
+                            continue;
+                        }
+                        const address beg = seg->get_code_run_addr(pr);
+                        if ((a >= beg) && (a < beg + seg->get_text_size())) {
+                            return fmt::format("{}+0x{:X}", seg->name(), a - beg);
+                        }
+                    }
+                    return "?";
+                };
+                LOG_ERROR(KERNEL, "Access violation {} address 0x{:X} in thread {} pc=0x{:X} ({}) lr=0x{:X} ({}) sp=0x{:X} r0=0x{:X} r1=0x{:X} r2=0x{:X} r3=0x{:X}",
+                    (exception_type == arm::exception_type_access_violation_read) ? "reading" : "writing", exception_data,
+                    crr_thread()->name(), core->get_pc(), where(core->get_pc()), core->get_lr(), where(core->get_lr()),
+                    core->get_sp(), core->get_reg(0), core->get_reg(1), core->get_reg(2), core->get_reg(3));
+            }
             break;
 
         case arm::exception_type_undefined_inst:
